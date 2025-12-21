@@ -2,12 +2,13 @@
 
 A fully decentralized internet platform for running WebAssembly applications, built with Rust and libp2p.
 
-## Project Status: Phase 1 - Foundation ✅
+## Project Status: Phase 2 - WebAssembly Runtime ✅
 
-**Current Version:** 0.1.0
+**Current Version:** 0.2.0
 
 ### Completed Features
 
+#### Phase 1: Network Foundation ✅
 - ✅ **libp2p Network Stack**: QUIC and TCP transport with Noise encryption
 - ✅ **Peer Discovery**: mDNS for local network discovery, Kademlia DHT for global discovery
 - ✅ **Network Protocols**: 
@@ -17,6 +18,15 @@ A fully decentralized internet platform for running WebAssembly applications, bu
   - GossipSub for pub/sub messaging
 - ✅ **CLI Tool**: Command-line interface for node management
 - ✅ **Logging**: Structured logging with tracing
+
+#### Phase 2: WebAssembly Runtime ✅ (NEW!)
+- ✅ **Wasmtime Integration**: Latest Wasmtime 39.0.1 with async support
+- ✅ **Resource Limiting**: Memory, execution time, and CPU (fuel) limits
+- ✅ **Content Addressing**: Blake3-based CIDs for WebAssembly modules
+- ✅ **Module Caching**: In-memory and disk-based module caching
+- ✅ **Host Functions**: Logging, time, random, and cryptography functions
+- ✅ **Sandboxing**: Configurable security profiles (conservative/permissive)
+- ✅ **Async Execution**: Full Tokio async/await support
 
 ## Quick Start
 
@@ -44,6 +54,19 @@ cargo build --release
 
 ```bash
 ./target/release/pied-piper daemon
+```
+
+#### Run a WebAssembly Module (NEW!)
+
+```bash
+# Run a WASM module with default settings
+./target/release/pied-piper run module.wasm --function main
+
+# Run with custom resource limits
+./target/release/pied-piper run module.wasm --function compute \
+  --max-memory 32 \
+  --max-time 10 \
+  --fuel 1000000
 ```
 
 #### Start with verbose logging

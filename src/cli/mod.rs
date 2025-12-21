@@ -56,6 +56,28 @@ pub enum Commands {
         /// Path to the application manifest
         manifest: PathBuf,
     },
+    
+    /// Run a WebAssembly module
+    Run {
+        /// Path to the Wasm module file
+        module: PathBuf,
+        
+        /// Function to execute (default: _start or main)
+        #[arg(short, long)]
+        function: Option<String>,
+        
+        /// Maximum memory in MB
+        #[arg(long, default_value = "128")]
+        max_memory: usize,
+        
+        /// Maximum execution time in seconds
+        #[arg(long, default_value = "30")]
+        max_time: u64,
+        
+        /// Enable fuel metering for CPU limits
+        #[arg(long)]
+        fuel: bool,
+    },
 }
 
 impl Cli {
