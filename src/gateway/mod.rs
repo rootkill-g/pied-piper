@@ -11,8 +11,10 @@ pub mod server;
 pub mod router;
 pub mod resolver;
 pub mod handler;
+pub mod io;
 
 pub use server::{GatewayServer, GatewayConfig};
 pub use router::Router;
 pub use resolver::ContentResolver;
 pub use handler::{RequestHandler, WasmHandler};
+pub use io::{WasmRequest, WasmResponse};

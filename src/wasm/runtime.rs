@@ -1,11 +1,60 @@
 use anyhow::{Context, Result};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wasmtime::*;
 
-/// WASI state for the store - simplified for now
-#[derive(Default)]
+/// WASI state for the store with I/O buffers
 pub struct WasiState {
-    // Placeholder for WASI context
+    /// Input buffer (stdin)
+    pub stdin_buffer: Arc<Mutex<Vec<u8>>>,
+    
+    /// Output buffer (stdout)
+    pub stdout_buffer: Arc<Mutex<Vec<u8>>>,
+    
+    /// Error buffer (stderr)
+    pub stderr_buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl WasiState {
+    /// Create a new WASI state with custom stdin data
+    pub fn with_stdin(stdin_data: Vec<u8>) -> Self {
+        Self {
+            stdin_buffer: Arc::new(Mutex::new(stdin_data)),
+            stdout_buffer: Arc::new(Mutex::new(Vec::new())),
+            stderr_buffer: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+    
+    /// Create a new WASI state with empty buffers
+    pub fn new() -> Self {
+        Self {
+            stdin_buffer: Arc::new(Mutex::new(Vec::new())),
+            stdout_buffer: Arc::new(Mutex::new(Vec::new())),
+            stderr_buffer: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+    
+    /// Get stdout contents
+    pub fn get_stdout(&self) -> Vec<u8> {
+        self.stdout_buffer.lock().unwrap().clone()
+    }
+    
+    /// Get stderr contents
+    pub fn get_stderr(&self) -> Vec<u8> {
+        self.stderr_buffer.lock().unwrap().clone()
+    }
+    
+    /// Clear output buffers
+    pub fn clear_output(&self) {
+        self.stdout_buffer.lock().unwrap().clear();
+        self.stderr_buffer.lock().unwrap().clear();
+    }
+}
+
+impl Default for WasiState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ResourceLimiter for WasiState {
@@ -106,6 +155,33 @@ impl WasmRuntime {
         store.limiter(|state| state);
         
         Ok(store)
+    }
+    
+    /// Create a new store with stdin data pre-loaded
+    pub fn create_store_with_stdin(&self, stdin_data: Vec<u8>) -> Result<Store<WasiState>> {
+        let state = WasiState::with_stdin(stdin_data);
+        let mut store = Store::new(&self.engine, state);
+        
+        // Set fuel limit if enabled
+        if self.config.enable_fuel {
+            store.set_fuel(self.config.initial_fuel)
+                .context("Failed to set fuel limit")?;
+        }
+        
+        // Set resource limits
+        store.limiter(|state| state);
+        
+        Ok(store)
+    }
+    
+    /// Get stdout data from a store
+    pub fn get_stdout(&self, store: &Store<WasiState>) -> Vec<u8> {
+        store.data().get_stdout()
+    }
+    
+    /// Get stderr data from a store
+    pub fn get_stderr(&self, store: &Store<WasiState>) -> Vec<u8> {
+        store.data().get_stderr()
     }
     
     /// Load a Wasm module from bytes

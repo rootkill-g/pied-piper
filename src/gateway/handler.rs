@@ -198,6 +198,8 @@ impl RequestHandler {
     
     /// Execute WASM as backend API
     async fn execute_wasm_api(&self, cid: &str, path: &str, body: &str) -> Result<Response> {
+        use super::io::{WasmRequest, WasmResponse};
+        
         info!("Executing WASM API: {} path: {}", cid, path);
         
         // Fetch module
@@ -205,29 +207,151 @@ impl RequestHandler {
             .await?
             .context("Module not found")?;
         
-        // Create runtime config
-        let config = WasmRuntimeConfig::default();
+        // Create WasmRequest
+        let wasm_request = WasmRequest::new(
+            "POST".to_string(),
+            path.to_string(),
+            body.to_string(),
+        )
+        .with_content_type("application/json".to_string());
+        
+        // Serialize request to JSON
+        let request_json = wasm_request.to_json()
+            .context("Failed to serialize request")?;
+        
+        info!("Request payload: {} bytes", request_json.len());
+        
+        // Create runtime config with reasonable limits for API execution
+        let config = WasmRuntimeConfig {
+            max_memory_bytes: 64 * 1024 * 1024, // 64MB for API handlers
+            max_execution_time: std::time::Duration::from_secs(10), // 10 second timeout
+            enable_async: true,
+            enable_wasi: true,
+            enable_fuel: true,
+            initial_fuel: 1_000_000, // Generous fuel for API calls
+        };
+        
         let runtime = WasmRuntime::new(config)?;
         
         // Load and validate module
         let module = runtime.load_module(&bytes)?;
+        info!("Loaded WASM module for API execution");
         
-        // TODO: For now, return success without actual execution
-        // In future: Create proper WASI environment, instantiate, and call handler
-        let response_text = serde_json::json!({
-            "status": "success",
-            "message": "WASM API execution (placeholder)",
-            "path": path,
-            "cid": cid,
-            "body_length": body.len(),
-        }).to_string();
+        // Create store with stdin containing the request
+        let mut store = runtime.create_store_with_stdin(request_json.into_bytes())?;
         
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(response_text.into())
-            .unwrap())
+        // Instantiate with WASI
+        let instance = runtime.instantiate_with_wasi(&mut store, &module).await?;
+        info!("Instantiated WASM module");
+        
+        // Look for API handler function (convention: _handle_request or handle_request)
+        let handler_func_name = if instance.get_func(&mut store, "_handle_request").is_some() {
+            "_handle_request"
+        } else if instance.get_func(&mut store, "handle_request").is_some() {
+            "handle_request"
+        } else {
+            // No standard handler found, return helpful error
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_IMPLEMENTED)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(
+                    serde_json::json!({
+                        "error": "No API handler found",
+                        "message": "Module must export 'handle_request' or '_handle_request' function",
+                        "path": path,
+                        "cid": cid,
+                    })
+                    .to_string()
+                    .into(),
+                )
+                .unwrap());
+        };
+        
+        info!("Calling handler function: {}", handler_func_name);
+        
+        // Execute the handler function
+        match runtime.execute_function(&mut store, &instance, handler_func_name, &[]).await {
+            Ok(_results) => {
+                info!("Handler function executed successfully");
+                
+                // Get stdout from the store
+                let stdout_bytes = runtime.get_stdout(&store);
+                
+                if stdout_bytes.is_empty() {
+                    // No output - module might not have written anything
+                    // Return success with note
+                    let response_text = serde_json::json!({
+                        "status": "success",
+                        "message": "Handler executed but produced no output",
+                        "path": path,
+                        "cid": cid,
+                        "note": "Module should write WasmResponse JSON to stdout",
+                    }).to_string();
+                    
+                    return Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(response_text.into())
+                        .unwrap());
+                }
+                
+                // Parse the WASM response from stdout
+                let stdout_str = String::from_utf8_lossy(&stdout_bytes).to_string();
+                info!("WASM output: {} bytes", stdout_bytes.len());
+                debug!("WASM response: {}", stdout_str);
+                
+                match WasmResponse::from_json(&stdout_str) {
+                    Ok(wasm_response) => {
+                        // Build HTTP response from WasmResponse
+                        let mut response_builder = Response::builder()
+                            .status(StatusCode::from_u16(wasm_response.status).unwrap_or(StatusCode::OK));
+                        
+                        // Add content type
+                        let content_type = wasm_response.content_type
+                            .unwrap_or_else(|| "application/json".to_string());
+                        response_builder = response_builder.header(header::CONTENT_TYPE, content_type);
+                        
+                        // Add custom headers
+                        for (key, value) in wasm_response.headers {
+                            response_builder = response_builder.header(key, value);
+                        }
+                        
+                        Ok(response_builder
+                            .body(wasm_response.body.into())
+                            .unwrap())
+                    }
+                    Err(parse_err) => {
+                        // Failed to parse response - return the raw output
+                        error!("Failed to parse WASM response: {}", parse_err);
+                        
+                        Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(stdout_str.into())
+                            .unwrap())
+                    }
+                }
+            }
+            Err(e) => {
+                error!("WASM execution error: {}", e);
+                Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(
+                        serde_json::json!({
+                            "error": "Execution failed",
+                            "message": e.to_string(),
+                            "path": path,
+                            "cid": cid,
+                        })
+                        .to_string()
+                        .into(),
+                    )
+                    .unwrap())
+            }
+        }
     }
+
     
     /// Guess content type from file extension
     fn guess_content_type(path: &str) -> &'static str {

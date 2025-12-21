@@ -37,6 +37,16 @@ A fully decentralized internet platform for running WebAssembly applications, bu
 - ✅ **Cache-First Fetch**: Check local cache before network requests
 - ⏳ **Peer-to-Peer Fetch**: Fetch modules from provider peers (partially implemented)
 
+#### Phase 4: HTTP Gateway ✅ (NEW!)
+- ✅ **HTTP Server**: Axum-based gateway for browser access
+- ✅ **URL Routing**: Access apps by CID (`/cid/<cid>`) or name (`/app/<name>`)
+- ✅ **Name Resolution**: Human-readable names via DHT lookups
+- ✅ **API Endpoints**: POST requests routed to WASM backend handlers
+- ✅ **WASM Execution**: Runtime with sandboxing and resource limits
+- ✅ **Error Handling**: Beautiful HTML error pages
+- ⏳ **Frontend Serving**: Asset bundling for complete apps (in progress)
+- ⏳ **Full I/O**: Request/response data passing (placeholder)
+
 ## Quick Start
 
 ### Prerequisites
@@ -101,6 +111,28 @@ cargo build --release
   --max-time 10 \
   --fuel
 ```
+
+#### Start HTTP Gateway (NEW!)
+
+```bash
+# Start gateway with defaults (localhost:8080)
+./target/release/pied-piper gateway
+
+# Custom configuration
+./target/release/pied-piper gateway \
+  --listen 0.0.0.0:8080 \
+  --tcp-port 4001 \
+  --quic-port 4002 \
+  --cors true
+
+# Access in browser:
+# - http://localhost:8080/ - Welcome page
+# - http://localhost:8080/health - Health check
+# - http://localhost:8080/cid/<CID>/ - Access app by CID
+# - http://localhost:8080/app/<name>/ - Access app by name
+```
+
+See [docs/GATEWAY.md](./docs/GATEWAY.md) for complete gateway documentation.
 
 #### Start with verbose logging
 
