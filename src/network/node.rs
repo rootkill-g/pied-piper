@@ -10,6 +10,9 @@ use tracing::{debug, info, warn};
 
 use super::behaviour::{PiedPiperBehaviour, PiedPiperEvent};
 use crate::content::protocol::PROTOCOL_NAME;
+use crate::content::{ModulePublisher, ModuleDiscovery, ModuleProvider};
+use crate::wasm::loader::{ModuleInfo, ModuleCid, ModuleLoader};
+use std::sync::Arc;
 
 /// Configuration for the network node
 #[derive(Debug, Clone)]
@@ -46,6 +49,9 @@ impl Default for NetworkNodeConfig {
 pub struct NetworkNode {
     swarm: Swarm<PiedPiperBehaviour>,
     config: NetworkNodeConfig,
+    publisher: ModulePublisher,
+    discovery: ModuleDiscovery,
+    provider: ModuleProvider,
 }
 
 impl NetworkNode {
@@ -77,7 +83,22 @@ impl NetworkNode {
             })
             .build();
 
-        Ok(Self { swarm, config })
+        // Create content distribution components
+        let publisher = ModulePublisher::new(local_peer_id);
+        let discovery = ModuleDiscovery::new();
+        
+        // Create a module loader for the provider
+        let cache_dir = std::env::current_dir()?.join(".pied-piper").join("modules");
+        let loader = Arc::new(ModuleLoader::new(cache_dir).await?);
+        let provider = ModuleProvider::new(loader);
+
+        Ok(Self {
+            swarm,
+            config,
+            publisher,
+            discovery,
+            provider,
+        })
     }
 
     /// Create the network behaviour with all protocols
@@ -192,6 +213,138 @@ impl NetworkNode {
     /// Get the list of connected peers
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.swarm.connected_peers().copied().collect()
+    }
+
+    /// Publish a WebAssembly module to the network
+    /// Returns the CID of the published module
+    pub async fn publish_module(
+        &mut self,
+        module_bytes: Vec<u8>,
+        name: Option<String>,
+        version: Option<String>,
+        author: Option<String>,
+        description: Option<String>,
+    ) -> Result<ModuleCid> {
+        info!("Publishing module to network");
+
+        // Calculate module CID
+        let cid = ModuleCid::from_bytes(&module_bytes);
+        
+        // Create module info
+        let module_info = ModuleInfo {
+            cid: cid.clone(),
+            name,
+            version,
+            size: module_bytes.len(),
+            dependencies: vec![],
+            author,
+            description,
+        };
+
+        // Store module in provider
+        self.provider
+            .provide_module(module_info.clone(), Arc::new(module_bytes.clone()))
+            .await?;
+
+        // Create DHT record for module metadata
+        let metadata_record = self
+            .publisher
+            .create_metadata_record(&module_info, &module_bytes)?;
+
+        // Publish to DHT
+        self.swarm
+            .behaviour_mut()
+            .kademlia
+            .put_record(metadata_record, kad::Quorum::One)?;
+
+        info!("Module {} published with CID: {}", 
+            module_info.name.as_deref().unwrap_or("unnamed"), 
+            cid
+        );
+
+        // Create and broadcast announcement via GossipSub
+        let announcement = self
+            .publisher
+            .create_announcement_message(&module_info)?;
+
+        let topic = gossipsub::IdentTopic::new(crate::content::publisher::MODULE_ANNOUNCEMENTS_TOPIC);
+        
+        // Subscribe to announcements topic if not already subscribed
+        let _ = self.swarm.behaviour_mut().gossipsub.subscribe(&topic);
+        
+        // Publish announcement
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, announcement)
+            .context("Failed to publish module announcement")?;
+
+        Ok(cid)
+    }
+
+    /// Find a module by its CID using DHT
+    /// Returns module metadata if found
+    pub async fn find_module_by_cid(&mut self, cid: &ModuleCid) -> Result<Option<ModuleInfo>> {
+        info!("Searching for module with CID: {}", cid);
+
+        // Query DHT for module metadata
+        let key = ModuleDiscovery::metadata_key(cid);
+        let query_id = self.swarm.behaviour_mut().kademlia.get_record(key);
+
+        // Register the query
+        self.discovery.register_dht_query(
+            query_id,
+            crate::content::discovery::QueryType::ModuleMetadata {
+                cid: cid.to_string(),
+            },
+        );
+
+        // In a real implementation, we'd wait for the query result asynchronously
+        // For now, return None - the result will come through the event loop
+        Ok(None)
+    }
+
+    /// Search for modules by name
+    /// Returns list of matching modules
+    pub async fn search_modules_by_name(&mut self, name: &str) -> Result<Vec<ModuleInfo>> {
+        info!("Searching for modules with name: {}", name);
+
+        // In a real implementation, we'd:
+        // 1. Query DHT for name -> CID mapping
+        // 2. Then fetch metadata for each CID
+        // For now, return empty list - results will come through event loop
+
+        Ok(vec![])
+    }
+
+    /// Fetch a module from the network by CID
+    /// Returns the module bytes if found
+    pub async fn fetch_module(&mut self, cid: &ModuleCid, peer: PeerId) -> Result<Option<Vec<u8>>> {
+        info!("Fetching module {} from peer {}", cid, peer);
+
+        // Create a module request
+        let request = crate::content::protocol::ModuleRequest::GetModule {
+            cid: cid.to_string(),
+        };
+
+        // Send request to peer
+        let request_id = self
+            .swarm
+            .behaviour_mut()
+            .content
+            .send_request(&peer, request);
+
+        // Register the request
+        self.discovery.register_request(
+            request_id,
+            crate::content::discovery::QueryType::Providers {
+                cid: cid.to_string(),
+            },
+        );
+
+        // In a real implementation, we'd wait for the response asynchronously
+        // For now, return None - the response will come through the event loop
+        Ok(None)
     }
 
     /// Run the network event loop

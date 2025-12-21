@@ -51,15 +51,25 @@ pub enum Commands {
         endpoint: String,
     },
 
-    /// Deploy a WebAssembly application (placeholder for Phase 3)
+    /// Deploy a WebAssembly application
     Deploy {
-        /// Path to the application manifest
+        /// Path to the WASM module file
         manifest: PathBuf,
+    },
+    
+    /// Search for modules by name
+    Search {
+        /// Module name to search for
+        name: String,
+        
+        /// Maximum time to wait for results in seconds
+        #[arg(long, default_value = "10")]
+        timeout: u64,
     },
     
     /// Run a WebAssembly module
     Run {
-        /// Path to the Wasm module file
+        /// Path to the Wasm module file or CID
         module: PathBuf,
         
         /// Function to execute (default: _start or main)

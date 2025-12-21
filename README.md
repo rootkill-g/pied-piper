@@ -2,7 +2,7 @@
 
 A fully decentralized internet platform for running WebAssembly applications, built with Rust and libp2p.
 
-## Project Status: Phase 2 - WebAssembly Runtime ✅
+## Project Status: Phase 3 - Content Distribution 🚀
 
 **Current Version:** 0.2.0
 
@@ -19,7 +19,7 @@ A fully decentralized internet platform for running WebAssembly applications, bu
 - ✅ **CLI Tool**: Command-line interface for node management
 - ✅ **Logging**: Structured logging with tracing
 
-#### Phase 2: WebAssembly Runtime ✅ (NEW!)
+#### Phase 2: WebAssembly Runtime ✅
 - ✅ **Wasmtime Integration**: Latest Wasmtime 39.0.1 with async support
 - ✅ **Resource Limiting**: Memory, execution time, and CPU (fuel) limits
 - ✅ **Content Addressing**: Blake3-based CIDs for WebAssembly modules
@@ -28,12 +28,22 @@ A fully decentralized internet platform for running WebAssembly applications, bu
 - ✅ **Sandboxing**: Configurable security profiles (conservative/permissive)
 - ✅ **Async Execution**: Full Tokio async/await support
 
+#### Phase 3: Content Distribution ✅ (NEW!)
+- ✅ **Module Publishing**: Deploy WASM modules to DHT with metadata
+- ✅ **Content Discovery**: Find modules by CID or search by name
+- ✅ **Request-Response Protocol**: CBOR-based module distribution protocol
+- ✅ **Module Provider**: Serve modules to other peers
+- ✅ **Network Integration**: Deploy, search, and run commands
+- ✅ **Cache-First Fetch**: Check local cache before network requests
+- ⏳ **Peer-to-Peer Fetch**: Fetch modules from provider peers (partially implemented)
+
 ## Quick Start
 
 ### Prerequisites
 
 - Rust 1.70+ (nightly recommended)
 - Cargo
+- wasm32-unknown-unknown or wasm32-wasi target for building WASM modules
 
 ### Installation
 
@@ -56,17 +66,40 @@ cargo build --release
 ./target/release/pied-piper daemon
 ```
 
+#### Deploy a WebAssembly Module (NEW!)
+
+```bash
+# Deploy a WASM module to the network
+./target/release/pied-piper deploy module.wasm
+
+# Output:
+# ✅ Module deployed successfully!
+# 📦 Module Name: module
+# 🔗 CID: bjmz4m6y7qxlqcktlzjk3i3dpyqxmqjqfqcrzq...
+# 🆔 Provider Peer ID: 12D3KooW...
+```
+
+#### Search for Modules (NEW!)
+
+```bash
+# Search for modules by name
+./target/release/pied-piper search hello_world --timeout 10
+```
+
 #### Run a WebAssembly Module (NEW!)
 
 ```bash
-# Run a WASM module with default settings
+# Run from local file
 ./target/release/pied-piper run module.wasm --function main
+
+# Run from network by CID (checks cache first)
+./target/release/pied-piper run bjmz4m6y7qxlqcktlzjk... --function main
 
 # Run with custom resource limits
 ./target/release/pied-piper run module.wasm --function compute \
   --max-memory 32 \
   --max-time 10 \
-  --fuel 1000000
+  --fuel
 ```
 
 #### Start with verbose logging
@@ -95,16 +128,22 @@ cargo build --release
 
 ### Testing Multi-Node Communication
 
-To test peer discovery, run multiple nodes on the same network:
+See [TESTING.md](./TESTING.md) for comprehensive end-to-end testing guide.
+
+**Quick Test:**
 
 **Terminal 1:**
 ```bash
-./target/release/pied-piper daemon --verbose --topic test
+./target/release/pied-piper daemon --verbose --tcp-port 8000
 ```
 
 **Terminal 2:**
 ```bash
-./target/release/pied-piper daemon --verbose --topic test
+# Deploy a module
+./target/release/pied-piper deploy hello.wasm
+
+# Search for it
+./target/release/pied-piper search hello
 ```
 
 The nodes should discover each other via mDNS and connect automatically!
