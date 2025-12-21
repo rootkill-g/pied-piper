@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use libp2p::{
-    futures::StreamExt, gossipsub, identify, kad, mdns, noise, ping, swarm::SwarmEvent, tcp, yamux,
-    Multiaddr, PeerId, Swarm, SwarmBuilder,
+    futures::StreamExt, gossipsub, identify, kad, mdns, noise, ping, request_response,
+    swarm::SwarmEvent, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -9,6 +9,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::behaviour::{PiedPiperBehaviour, PiedPiperEvent};
+use crate::content::protocol::PROTOCOL_NAME;
 
 /// Configuration for the network node
 #[derive(Debug, Clone)]
@@ -134,6 +135,12 @@ impl NetworkNode {
             gossipsub.subscribe(&topic)?;
             info!("Subscribed to topic: {}", topic_name);
         }
+        
+        // Set up request-response protocol for module distribution
+        let content = request_response::Behaviour::new(
+            [(PROTOCOL_NAME, request_response::ProtocolSupport::Full)],
+            request_response::Config::default(),
+        );
 
         Ok(PiedPiperBehaviour {
             kademlia,
@@ -141,6 +148,7 @@ impl NetworkNode {
             identify,
             ping,
             gossipsub,
+            content,
         })
     }
 
@@ -245,6 +253,9 @@ impl NetworkNode {
             }
             PiedPiperEvent::Gossipsub(event) => {
                 self.handle_gossipsub_event(event).await?;
+            }
+            PiedPiperEvent::Content(event) => {
+                self.handle_content_event(event).await?;
             }
         }
         Ok(())
@@ -357,6 +368,37 @@ impl NetworkNode {
             }
             _ => {
                 debug!("GossipSub event: {:?}", event);
+            }
+        }
+        Ok(())
+    }
+    
+    /// Handle content distribution events
+    async fn handle_content_event(&mut self, event: request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>) -> Result<()> {
+        use request_response::{Message, Event as RREvent};
+        
+        match event {
+            RREvent::Message { peer, message, connection_id: _ } => {
+                match message {
+                    Message::Request { request, channel, .. } => {
+                        info!("Received module request from {}: {:?}", peer, request);
+                        // Request handling will be done by ModuleProvider in the application layer
+                        // For now, just log it
+                    }
+                    Message::Response { response, .. } => {
+                        info!("Received module response from {}: {:?}", peer, response);
+                        // Response handling will be done by the application layer
+                    }
+                }
+            }
+            RREvent::OutboundFailure { peer, request_id, error, .. } => {
+                warn!("Outbound request {:?} to {} failed: {:?}", request_id, peer, error);
+            }
+            RREvent::InboundFailure { peer, error, .. } => {
+                warn!("Inbound request from {} failed: {:?}", peer, error);
+            }
+            RREvent::ResponseSent { peer, .. } => {
+                debug!("Response sent to {}", peer);
             }
         }
         Ok(())

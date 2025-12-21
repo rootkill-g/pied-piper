@@ -1,4 +1,5 @@
-use libp2p::{gossipsub, identify, kad, mdns, ping, swarm::NetworkBehaviour};
+use libp2p::{gossipsub, identify, kad, mdns, ping, request_response, swarm::NetworkBehaviour};
+use crate::content::protocol::ContentProtocol;
 
 /// The main network behaviour combining all libp2p protocols
 #[derive(NetworkBehaviour)]
@@ -18,6 +19,9 @@ pub struct PiedPiperBehaviour {
 
     /// GossipSub for pub/sub messaging
     pub gossipsub: gossipsub::Behaviour,
+    
+    /// Request-Response protocol for module distribution
+    pub content: ContentProtocol,
 }
 
 /// Events emitted by the network behaviour
@@ -28,6 +32,7 @@ pub enum PiedPiperEvent {
     Identify(identify::Event),
     Ping(ping::Event),
     Gossipsub(gossipsub::Event),
+    Content(request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>),
 }
 
 impl From<kad::Event> for PiedPiperEvent {
@@ -57,5 +62,11 @@ impl From<ping::Event> for PiedPiperEvent {
 impl From<gossipsub::Event> for PiedPiperEvent {
     fn from(event: gossipsub::Event) -> Self {
         PiedPiperEvent::Gossipsub(event)
+    }
+}
+
+impl From<request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>> for PiedPiperEvent {
+    fn from(event: request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>) -> Self {
+        PiedPiperEvent::Content(event)
     }
 }

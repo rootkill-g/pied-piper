@@ -8,7 +8,7 @@
 //! - Sandboxed execution environment
 
 mod runtime;
-mod loader;
+pub mod loader; // Make loader public for content module
 mod sandbox;
 mod host;
 

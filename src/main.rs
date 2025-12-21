@@ -1,6 +1,7 @@
 mod cli;
 mod network;
 mod wasm;
+mod content;
 
 use anyhow::Result;
 use cli::{Cli, Commands};
