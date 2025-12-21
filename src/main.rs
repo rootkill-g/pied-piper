@@ -2,6 +2,7 @@ mod cli;
 mod network;
 mod wasm;
 mod content;
+mod gateway;
 
 use anyhow::Result;
 use cli::{Cli, Commands};
@@ -199,6 +200,70 @@ async fn main() -> Result<()> {
                     return Err(e);
                 }
             }
+        }
+        
+        Commands::Gateway {
+            listen,
+            tcp_port,
+            quic_port,
+            bootstrap,
+            cors,
+            timeout,
+        } => {
+            use gateway::{GatewayServer, GatewayConfig};
+            use std::sync::Arc;
+            use wasm::ModuleLoader;
+            
+            info!("🌐 Starting HTTP Gateway");
+            
+            // Parse listen address
+            let listen_addr = listen.parse()
+                .map_err(|e| anyhow::anyhow!("Invalid listen address: {}", e))?;
+            
+            // Create gateway configuration
+            let mut gateway_config = GatewayConfig {
+                listen_addr,
+                enable_cors: cors,
+                request_timeout: timeout,
+                ..Default::default()
+            };
+            
+            if cli.verbose {
+                gateway_config.verbose = true;
+            }
+            
+            // Parse bootstrap peers
+            let bootstrap_peers = parse_bootstrap_peers(&bootstrap)?;
+            
+            // Create network node configuration
+            let network_config = NetworkNodeConfig {
+                tcp_port,
+                quic_port,
+                enable_mdns: true,
+                bootstrap_peers,
+                topics: vec![],
+            };
+            
+            // Create and start network node
+            info!("Initializing P2P network node...");
+            let mut network = NetworkNode::new(network_config).await?;
+            
+            // Start listening
+            network.start_listening()?;
+            info!("✅ P2P node started");
+            info!("   Peer ID: {}", network.local_peer_id());
+            
+            // Create module loader with default cache directory
+            let cache_dir = std::env::temp_dir().join("pied-piper-cache");
+            let loader = Arc::new(ModuleLoader::new(cache_dir).await?);
+            
+            // Create and start gateway server
+            let gateway = GatewayServer::new(gateway_config, network, loader).await?;
+            
+            info!("🚀 Starting gateway server on http://{}", listen);
+            
+            // This blocks until server is stopped
+            gateway.start().await?;
         }
     }
 

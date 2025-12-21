@@ -11,6 +11,11 @@ use tokio::sync::RwLock;
 pub struct ModuleCid(pub String);
 
 impl ModuleCid {
+    /// Create a ModuleCid from an existing CID string
+    pub fn new(cid: String) -> Self {
+        ModuleCid(cid)
+    }
+    
     /// Generate a CID from module bytes using Blake3
     pub fn from_bytes(data: &[u8]) -> Self {
         let hash = blake3::hash(data);

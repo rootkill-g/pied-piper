@@ -88,6 +88,33 @@ pub enum Commands {
         #[arg(long)]
         fuel: bool,
     },
+    
+    /// Start HTTP gateway server
+    Gateway {
+        /// HTTP listening address
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        listen: String,
+        
+        /// TCP port for P2P network
+        #[arg(long, default_value = "0")]
+        tcp_port: u16,
+        
+        /// QUIC port for P2P network
+        #[arg(long, default_value = "0")]
+        quic_port: u16,
+        
+        /// Bootstrap peer addresses
+        #[arg(long)]
+        bootstrap: Vec<String>,
+        
+        /// Enable CORS
+        #[arg(long, default_value = "true")]
+        cors: bool,
+        
+        /// Request timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
 }
 
 impl Cli {
