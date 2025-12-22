@@ -1,0 +1,261 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.container {
+    width: 90%;
+    max-width: 1200px;
+    height: 90vh;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.status {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.status.connected {
+    background: #10b981;
+}
+
+.status.disconnected {
+    background: #ef4444;
+}
+
+.status.error {
+    background: #f59e0b;
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background: #f9fafb;
+}
+
+.message {
+    margin-bottom: 16px;
+    padding: 12px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.message.own-message {
+    background: #dbeafe;
+    border-left: 3px solid #3b82f6;
+}
+
+.message-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.message-header strong {
+    color: #374151;
+    font-size: 14px;
+}
+
+.timestamp {
+    color: #9ca3af;
+    font-size: 12px;
+}
+
+.message-text {
+    color: #1f2937;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+.system-message {
+    text-align: center;
+    color: #6b7280;
+    font-style: italic;
+    font-size: 14px;
+    background: transparent;
+    box-shadow: none;
+}
+
+.error-message {
+    color: #ef4444;
+}
+
+.input-area {
+    display: flex;
+    padding: 20px;
+    background: white;
+    border-top: 1px solid #e5e7eb;
+}
+
+#messageInput {
+    flex: 1;
+    padding: 12px;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#messageInput:focus {
+    border-color: #667eea;
+}
+
+#sendButton {
+    margin-left: 12px;
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+#sendButton:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+#sendButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sidebar {
+    width: 250px;
+    background: #f9fafb;
+    border-left: 1px solid #e5e7eb;
+    padding: 20px;
+}
+
+.sidebar h3 {
+    color: #374151;
+    margin-bottom: 16px;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#userList {
+    list-style: none;
+}
+
+#userList li {
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: white;
+    border-radius: 6px;
+    color: #1f2937;
+    font-size: 14px;
+}
+
+#userList li.current-user {
+    background: #dbeafe;
+    font-weight: 600;
+}
+
+.join-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.join-dialog {
+    background: white;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    text-align: center;
+    min-width: 300px;
+}
+
+.join-dialog h2 {
+    margin-bottom: 24px;
+    color: #1f2937;
+}
+
+#usernameInput {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 16px;
+    margin-bottom: 16px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#usernameInput:focus {
+    border-color: #667eea;
+}
+
+#joinButton {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+#joinButton:hover {
+    opacity: 0.9;
+}

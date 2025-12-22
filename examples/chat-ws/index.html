@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pied Piper Chat</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>💬 Pied Piper Chat</h1>
+            <div class="status" id="status">Disconnected</div>
+        </header>
+
+        <div class="main-content">
+            <div class="chat-area">
+                <div class="messages" id="messages"></div>
+                <div class="input-area">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Type a message..." 
+                        disabled
+                    >
+                    <button id="sendButton" disabled>Send</button>
+                </div>
+            </div>
+
+            <aside class="sidebar">
+                <h3>Online Users</h3>
+                <ul id="userList"></ul>
+            </aside>
+        </div>
+
+        <div class="join-overlay" id="joinOverlay">
+            <div class="join-dialog">
+                <h2>Join Chat</h2>
+                <input 
+                    type="text" 
+                    id="usernameInput" 
+                    placeholder="Enter your username" 
+                    maxlength="20"
+                >
+                <button id="joinButton">Join</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

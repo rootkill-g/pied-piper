@@ -1,0 +1,414 @@
+use serde::{Deserialize, Serialize};
+use std::io::{self, Read, Write};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Post {
+    id: String,
+    title: String,
+    content: String,
+    created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePost {
+    title: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePost {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Request {
+    method: String,
+    path: String,
+    query: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct Response {
+    status: u16,
+    body: String,
+    headers: Vec<(String, String)>,
+}
+
+mod host {
+    #[link(wasm_import_module = "host")]
+    extern "C" {
+        fn storage_get_v2(key_ptr: *const u8, key_len: usize) -> i32;
+        fn storage_set_v2(
+            key_ptr: *const u8,
+            key_len: usize,
+            value_ptr: *const u8,
+            value_len: usize,
+        ) -> i32;
+        fn storage_delete_v2(key_ptr: *const u8, key_len: usize) -> i32;
+        fn host_get_result(ptr: *mut u8, len: usize) -> usize;
+        fn host_now_millis() -> u64;
+    }
+
+    pub fn storage_get(key: &str) -> Option<String> {
+        unsafe {
+            let ret = storage_get_v2(key.as_ptr(), key.len());
+            if ret < 0 {
+                return None;
+            }
+            let size = ret as usize;
+            let mut buffer = vec![0u8; size];
+            host_get_result(buffer.as_mut_ptr(), size);
+            String::from_utf8(buffer).ok()
+        }
+    }
+
+    pub fn storage_set(key: &str, value: &str) -> bool {
+        unsafe {
+            let ret = storage_set_v2(
+                key.as_ptr(),
+                key.len(),
+                value.as_ptr(),
+                value.len(),
+            );
+            ret >= 0
+        }
+    }
+
+    pub fn storage_delete(key: &str) -> bool {
+        unsafe {
+            let ret = storage_delete_v2(key.as_ptr(), key.len());
+            ret >= 0
+        }
+    }
+
+    pub fn now_millis() -> u64 {
+        unsafe { host_now_millis() }
+    }
+}
+
+const MAX_TITLE_LEN: usize = 200;
+const MAX_CONTENT_LEN: usize = 50_000;
+
+fn get_post_ids() -> Vec<String> {
+    host::storage_get("blog:posts")
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+fn save_post_ids(ids: &[String]) -> bool {
+    if let Ok(json) = serde_json::to_string(ids) {
+        host::storage_set("blog:posts", &json)
+    } else {
+        false
+    }
+}
+
+fn get_next_id() -> String {
+    let key = "blog:next_id";
+    let current = host::storage_get(key)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
+    let next_id = current.to_string();
+    host::storage_set(key, &(current + 1).to_string());
+    next_id
+}
+
+fn get_post(id: &str) -> Option<Post> {
+    let key = format!("blog:post:{}", id);
+    host::storage_get(&key)
+        .and_then(|json| serde_json::from_str(&json).ok())
+}
+
+fn list_posts() -> Vec<Post> {
+    get_post_ids()
+        .iter()
+        .filter_map(|id| get_post(id))
+        .collect()
+}
+
+fn create_post(title: String, content: String) -> Result<Post, String> {
+    if title.len() > MAX_TITLE_LEN {
+        return Err(format!("Title too long (max {})", MAX_TITLE_LEN));
+    }
+    if content.len() > MAX_CONTENT_LEN {
+        return Err(format!("Content too long (max {})", MAX_CONTENT_LEN));
+    }
+
+    let id = get_next_id();
+    let post = Post {
+        id: id.clone(),
+        title,
+        content,
+        created_at: host::now_millis(),
+        updated_at: None,
+    };
+
+    let key = format!("blog:post:{}", id);
+    let json = serde_json::to_string(&post)
+        .map_err(|e| format!("Serialization error: {}", e))?;
+
+    if !host::storage_set(&key, &json) {
+        return Err("Failed to save post".to_string());
+    }
+
+    let mut ids = get_post_ids();
+    ids.push(id);
+    if !save_post_ids(&ids) {
+        return Err("Failed to update post index".to_string());
+    }
+
+    Ok(post)
+}
+
+fn update_post(id: String, title: Option<String>, content: Option<String>) -> Result<Post, String> {
+    let mut post = get_post(&id)
+        .ok_or_else(|| format!("Post {} not found", id))?;
+
+    if let Some(new_title) = title {
+        if new_title.len() > MAX_TITLE_LEN {
+            return Err(format!("Title too long (max {})", MAX_TITLE_LEN));
+        }
+        post.title = new_title;
+    }
+
+    if let Some(new_content) = content {
+        if new_content.len() > MAX_CONTENT_LEN {
+            return Err(format!("Content too long (max {})", MAX_CONTENT_LEN));
+        }
+        post.content = new_content;
+    }
+
+    post.updated_at = Some(host::now_millis());
+
+    let key = format!("blog:post:{}", id);
+    let json = serde_json::to_string(&post)
+        .map_err(|e| format!("Serialization error: {}", e))?;
+
+    if host::storage_set(&key, &json) {
+        Ok(post)
+    } else {
+        Err("Failed to update post".to_string())
+    }
+}
+
+fn delete_post(id: &str) -> Result<(), String> {
+    let key = format!("blog:post:{}", id);
+    if !host::storage_delete(&key) {
+        return Err("Failed to delete post".to_string());
+    }
+
+    let mut ids = get_post_ids();
+    ids.retain(|post_id| post_id != id);
+    if save_post_ids(&ids) {
+        Ok(())
+    } else {
+        Err("Failed to update post index".to_string())
+    }
+}
+
+fn parse_query(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let mut parts = pair.split('=');
+            let key = parts.next()?;
+            let value = parts.next()?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn handle_api_request(req: Request) -> Response {
+    let method = req.method.as_str();
+    let path = req.path.as_str();
+
+    let query_params: Vec<(String, String)> = req
+        .query
+        .as_ref()
+        .map(|q| parse_query(q))
+        .unwrap_or_default();
+
+    let id_param = query_params
+        .iter()
+        .find(|(k, _)| k == "id")
+        .map(|(_, v)| v.as_str());
+
+    match (method, path) {
+        ("GET", "/api/posts") => {
+            if let Some(id) = id_param {
+                match get_post(id) {
+                    Some(post) => Response {
+                        status: 200,
+                        body: serde_json::to_string(&post).unwrap(),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                    None => Response {
+                        status: 404,
+                        body: r#"{"error":"Post not found"}"#.to_string(),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                }
+            } else {
+                let posts = list_posts();
+                Response {
+                    status: 200,
+                    body: serde_json::to_string(&posts).unwrap(),
+                    headers: vec![
+                        ("Content-Type".to_string(), "application/json".to_string())
+                    ],
+                }
+            }
+        }
+
+        ("POST", "/api/posts") => {
+            let body = req.body.unwrap_or_default();
+            match serde_json::from_str::<CreatePost>(&body) {
+                Ok(create_req) => match create_post(create_req.title, create_req.content) {
+                    Ok(post) => Response {
+                        status: 201,
+                        body: serde_json::to_string(&post).unwrap(),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                    Err(err) => Response {
+                        status: 500,
+                        body: format!(r#"{{"error":"{}"}}"#, err),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                },
+                Err(_) => Response {
+                    status: 400,
+                    body: r#"{"error":"Invalid request body"}"#.to_string(),
+                    headers: vec![
+                        ("Content-Type".to_string(), "application/json".to_string())
+                    ],
+                },
+            }
+        }
+
+        ("PUT", "/api/posts") => {
+            let body = req.body.unwrap_or_default();
+            match serde_json::from_str::<UpdatePost>(&body) {
+                Ok(update_req) => {
+                    match update_post(update_req.id, update_req.title, update_req.content) {
+                        Ok(post) => Response {
+                            status: 200,
+                            body: serde_json::to_string(&post).unwrap(),
+                            headers: vec![
+                                ("Content-Type".to_string(), "application/json".to_string())
+                            ],
+                        },
+                        Err(err) => {
+                            let status = if err.contains("not found") { 404 } else { 500 };
+                            Response {
+                                status,
+                                body: format!(r#"{{"error":"{}"}}"#, err),
+                                headers: vec![
+                                    ("Content-Type".to_string(), "application/json".to_string())
+                                ],
+                            }
+                        }
+                    }
+                }
+                Err(_) => Response {
+                    status: 400,
+                    body: r#"{"error":"Invalid request body"}"#.to_string(),
+                    headers: vec![
+                        ("Content-Type".to_string(), "application/json".to_string())
+                    ],
+                },
+            }
+        }
+
+        ("DELETE", "/api/posts") => {
+            if let Some(id) = id_param {
+                match delete_post(id) {
+                    Ok(_) => Response {
+                        status: 200,
+                        body: r#"{"success":true}"#.to_string(),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                    Err(err) => Response {
+                        status: 500,
+                        body: format!(r#"{{"error":"{}"}}"#, err),
+                        headers: vec![
+                            ("Content-Type".to_string(), "application/json".to_string())
+                        ],
+                    },
+                }
+            } else {
+                Response {
+                    status: 400,
+                    body: r#"{"error":"Missing id parameter"}"#.to_string(),
+                    headers: vec![
+                        ("Content-Type".to_string(), "application/json".to_string())
+                    ],
+                }
+            }
+        }
+
+        _ => Response {
+            status: 404,
+            body: r#"{"error":"Not found"}"#.to_string(),
+            headers: vec![
+                ("Content-Type".to_string(), "application/json".to_string())
+            ],
+        },
+    }
+}
+
+fn main() {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+
+    let request: Request = match serde_json::from_str(&input) {
+        Ok(req) => req,
+        Err(e) => {
+            let error_response = Response {
+                status: 400,
+                body: format!(r#"{{"error":"Invalid request: {}"}}"#, e),
+                headers: vec![
+                    ("Content-Type".to_string(), "application/json".to_string())
+                ],
+            };
+            let output = serde_json::to_string(&error_response).unwrap();
+            print!("{}", output);
+            return;
+        }
+    };
+
+    // Only handle API requests; gateway serves static assets
+    if !request.path.starts_with("/api/") {
+        let error_response = Response {
+            status: 404,
+            body: r#"{"error":"Not found"}"#.to_string(),
+            headers: vec![
+                ("Content-Type".to_string(), "application/json".to_string())
+            ],
+        };
+        let output = serde_json::to_string(&error_response).unwrap();
+        print!("{}", output);
+        return;
+    }
+
+    let response = handle_api_request(request);
+    let output = serde_json::to_string(&response).unwrap();
+    print!("{}", output);
+    io::stdout().flush().unwrap();
+}
