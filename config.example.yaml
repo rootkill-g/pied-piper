@@ -18,6 +18,10 @@ network:
   quic_port: 4002
   
   # Enable mDNS for automatic local peer discovery
+  #
+  # ⚠️ For production: Set enable_mdns=false and configure bootstrap_peers
+  # mDNS only works on local networks. For internet-wide connectivity,
+  # you MUST configure bootstrap peers. See docs/NETWORK_DISCOVERY.md
   enable_mdns: true
   
   # Bootstrap peers for initial network connection

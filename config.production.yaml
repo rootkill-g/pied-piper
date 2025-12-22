@@ -4,11 +4,28 @@
 network:
   tcp_port: 4001
   quic_port: 4002
-  enable_mdns: false  # Disable mDNS in production
+  enable_mdns: false  # Disable mDNS in production (only works on local networks)
+  
+  # ⚠️ CRITICAL: Bootstrap peers are required for network discovery!
+  # Without bootstrap peers, nodes cannot find each other (mDNS is disabled).
+  # 
+  # Setup Instructions:
+  # 1. Deploy 2-3 bootstrap nodes with static IPs/DNS
+  # 2. Get their Peer IDs from logs: "Local peer ID: 12D3KooW..."
+  # 3. Add them below in format: PEER_ID@/ip4/IP_ADDRESS/tcp/PORT
+  # 
+  # Example bootstrap peer formats:
+  # - IPv4: 12D3KooWRBhw...@/ip4/203.0.113.10/tcp/4001
+  # - IPv6: 12D3KooWRBhw...@/ip6/2001:db8::1/tcp/4001
+  # - DNS:  12D3KooWRBhw...@/dns4/bootstrap.example.com/tcp/4001
+  #
+  # See docs/NETWORK_DISCOVERY.md for complete guide
   bootstrap_peers:
-    # Add your production bootstrap peers here
-    # - 12D3KooW...@/ip4/prod-node-1.example.com/tcp/4001
-    # - 12D3KooW...@/ip4/prod-node-2.example.com/tcp/4001
+    # TODO: Add your production bootstrap peers here
+    # - 12D3KooWRBhwfeP8p3FEj6txR6xZJfPDa1N3vFfN5cNNp5Xr1e4F@/ip4/203.0.113.10/tcp/4001
+    # - 12D3KooWAnotherPeer@/dns4/bootstrap-backup.example.com/tcp/4001
+    []
+  
   topics:
     - pied-piper-prod
   max_connections: 500
