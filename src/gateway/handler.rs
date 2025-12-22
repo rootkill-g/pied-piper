@@ -364,12 +364,18 @@ impl RequestHandler {
                     content_type
                 );
 
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, content_type)
-                    .header(header::CACHE_CONTROL, "public, max-age=3600")
-                    .body(asset_data.clone().into())
-                    .unwrap();
+                return self.build_asset_response(asset_path, asset_data, content_type);
+            }
+
+            // Asset not found in bundle - check if it's a SPA route
+            // For SPA apps, fallback to index.html for navigation routes
+            if !asset_path.contains('.') && bundle.get_asset("index.html").is_some() {
+                info!(
+                    "Asset '{}' not found, falling back to index.html (SPA mode)",
+                    asset_path
+                );
+                let index_data = bundle.get_asset("index.html").unwrap();
+                return self.build_asset_response("index.html", index_data, "text/html");
             }
 
             // Asset not found in bundle, return 404 with asset listing
@@ -399,12 +405,7 @@ impl RequestHandler {
                         index_path,
                         html_data.len()
                     );
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, "text/html")
-                        .header(header::CACHE_CONTROL, "public, max-age=3600")
-                        .body(html_data.into())
-                        .unwrap()
+                    self.build_html_response(html_data)
                 }
                 Ok(None) => {
                     // index.html not found in bundle, return app listing
@@ -419,6 +420,55 @@ impl RequestHandler {
             // Single WASM file - show placeholder page
             self.serve_app_listing(bytes).await
         }
+    }
+
+    /// Build asset response with security headers and caching
+    fn build_asset_response(&self, path: &str, data: &[u8], content_type: &str) -> Response {
+        let mut builder = Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, content_type);
+
+        // Add security headers for HTML files
+        if content_type == "text/html" {
+            builder = builder
+                .header(
+                    "Content-Security-Policy",
+                    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'"
+                )
+                .header("X-Content-Type-Options", "nosniff")
+                .header("X-Frame-Options", "SAMEORIGIN")
+                .header("Referrer-Policy", "strict-origin-when-cross-origin")
+                .header(header::CACHE_CONTROL, "public, max-age=3600, must-revalidate");
+        } else {
+            // Static assets get long-term caching
+            builder = builder
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+        }
+
+        // Add ETag for cache validation
+        builder = builder.header(
+            header::ETAG,
+            format!("\"{}\"", blake3::hash(data).to_hex()),
+        );
+
+        builder.body(data.to_vec().into()).unwrap()
+    }
+
+    /// Build HTML response with security headers
+    fn build_html_response(&self, html_data: Vec<u8>) -> Response {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html")
+            .header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'"
+            )
+            .header("X-Content-Type-Options", "nosniff")
+            .header("X-Frame-Options", "SAMEORIGIN")
+            .header("Referrer-Policy", "strict-origin-when-cross-origin")
+            .header(header::CACHE_CONTROL, "public, max-age=3600, must-revalidate")
+            .body(html_data.into())
+            .unwrap()
     }
 
     /// Serve application listing (fallback when no index.html found)
@@ -477,16 +527,17 @@ impl RequestHandler {
                     content_type
                 );
 
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, content_type)
-                    .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-                    .header(
-                        header::ETAG,
-                        format!("\"{}\"", blake3::hash(asset_data).to_hex()),
-                    )
-                    .body(asset_data.clone().into())
-                    .unwrap();
+                return self.build_asset_response(path, asset_data, content_type);
+            }
+
+            // Asset not found in bundle - check SPA fallback for navigation routes
+            if !path.contains('.') && bundle.get_asset("index.html").is_some() {
+                info!(
+                    "Static file '{}' not found, falling back to index.html (SPA mode)",
+                    path
+                );
+                let index_data = bundle.get_asset("index.html").unwrap();
+                return self.build_asset_response("index.html", index_data, "text/html");
             }
 
             // Asset not found in bundle
