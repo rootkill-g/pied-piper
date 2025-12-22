@@ -205,22 +205,32 @@ impl ModuleLoader {
                 info!("Module {} not in memory, trying disk...", cid);
                 match self.load_from_disk(cid).await {
                     Ok(bytes) => {
-                        // Create basic module info since we don't have metadata on disk
-                        let info = ModuleInfo {
-                            cid: cid.clone(),
-                            name: None,
-                            version: None,
-                            size: bytes.len(),
-                            dependencies: vec![],
-                            author: None,
-                            description: None,
+                        // Try to load metadata from disk first
+                        let info = match self.load_module_info(cid).await {
+                            Ok(Some(info)) => {
+                                info!("Module {} loaded from disk with metadata: name={:?}, version={:?}", 
+                                    cid, info.name, info.version);
+                                info
+                            }
+                            _ => {
+                                // Create basic module info if no metadata exists
+                                info!("Module {} loaded from disk without metadata", cid);
+                                ModuleInfo {
+                                    cid: cid.clone(),
+                                    name: None,
+                                    version: None,
+                                    size: bytes.len(),
+                                    dependencies: vec![],
+                                    author: None,
+                                    description: None,
+                                }
+                            }
                         };
 
                         // Add to memory cache for future lookups
                         self.insert_into_cache(cid.clone(), info.clone(), bytes.clone())
                             .await;
 
-                        info!("Module {} loaded from disk", cid);
                         Some((info, bytes))
                     }
                     Err(e) => {
@@ -267,12 +277,17 @@ impl ModuleLoader {
         info!("Adding module {} to cache", cid);
 
         // Add to in-memory cache
-        self.insert_into_cache(cid.clone(), info, bytes.clone())
+        self.insert_into_cache(cid.clone(), info.clone(), bytes.clone())
             .await;
 
-        // Also save to disk for persistence
+        // Save WASM bytes to disk
         if let Err(e) = self.save_to_disk(cid, &bytes).await {
             tracing::warn!("Failed to save module {} to disk: {}", cid, e);
+        }
+        
+        // Save metadata to disk for persistence
+        if let Err(e) = self.update_module_info(cid, info).await {
+            tracing::warn!("Failed to save metadata for module {} to disk: {}", cid, e);
         }
     }
 

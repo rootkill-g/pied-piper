@@ -332,10 +332,24 @@ impl RequestHandler {
 
     /// Resolve name to CID
     async fn resolve_name(&self, name: &str) -> Result<Option<String>> {
+        debug!("Resolving name '{}' to CID", name);
+        
+        // First try DHT-based persistent name resolution (e.g., "hello-api" -> CID)
+        if let Ok(Some(cid)) = self.network.resolve_name(name).await {
+            info!("Resolved '{}' to CID {} via DHT", name, cid);
+            return Ok(Some(cid));
+        }
+        
+        // Fallback to search (queries connected peers)
         let results = self.network.search_modules_by_name(name).await?;
-
-        // results is Vec<ModuleMetadata>
-        Ok(results.first().map(|meta| meta.cid.clone()))
+        
+        if let Some(meta) = results.first() {
+            info!("Resolved '{}' to CID {} via peer search", name, meta.cid);
+            return Ok(Some(meta.cid.clone()));
+        }
+        
+        warn!("Failed to resolve name '{}' - not found in DHT or peer search", name);
+        Ok(None)
     }
 
     /// Check if string looks like CID
