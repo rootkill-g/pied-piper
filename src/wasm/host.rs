@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -203,39 +204,47 @@ impl HostFunctions {
         })?;
 
         let mut http_instance = linker.instance("component:api-client/http")?;
+        debug!("Created HTTP instance");
         let http_client_get = self.http_client.clone();
-        http_instance.func_wrap_async("get", move |_store, (url,): (String,)| {
-            let client = http_client_get.clone();
-            Box::new(async move {
-                match client.get(&url).send().await {
-                    Ok(response) => {
-                        let status = response.status().as_u16() as u32;
-                        match response.bytes().await {
-                            Ok(bytes) => Ok((status, bytes.to_vec())),
-                            Err(_) => Ok((500u32, Vec::new())),
+        http_instance.func_wrap_async(
+            "get",
+            move |_store, (url,): (String,)| {
+                let client = http_client_get.clone();
+                Box::new(async move {
+                    match client.get(&url).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16() as u32;
+                            match response.bytes().await {
+                                Ok(bytes) => Ok((status, bytes.to_vec())),
+                                Err(_) => Ok((500u32, Vec::new())),
+                            }
                         }
+                        Err(_) => Ok((0u32, Vec::new())),
                     }
-                    Err(_) => Ok((0u32, Vec::new())),
-                }
-            })
-        })?;
+                })
+            },
+        )?;
+        debug!("Added HTTP get function");
 
         let http_client_post = self.http_client.clone();
-        http_instance.func_wrap_async("post", move |_store, (url, body): (String, Vec<u8>)| {
-            let client = http_client_post.clone();
-            Box::new(async move {
-                match client.post(&url).body(body).send().await {
-                    Ok(response) => {
-                        let status = response.status().as_u16() as u32;
-                        match response.bytes().await {
-                            Ok(bytes) => Ok((status, bytes.to_vec())),
-                            Err(_) => Ok((500u32, Vec::new())),
+        http_instance.func_wrap_async(
+            "post",
+            move |_store, (url, body): (String, Vec<u8>)| {
+                let client = http_client_post.clone();
+                Box::new(async move {
+                    match client.post(&url).body(body).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16() as u32;
+                            match response.bytes().await {
+                                Ok(bytes) => Ok((status, bytes.to_vec())),
+                                Err(_) => Ok((500u32, Vec::new())),
+                            }
                         }
+                        Err(_) => Ok((0u32, Vec::new())),
                     }
-                    Err(_) => Ok((0u32, Vec::new())),
-                }
-            })
-        })?;
+                })
+            },
+        )?;
 
         let mut storage_instance = linker.instance("component:api-client/storage")?;
         let storage_get = self.storage.clone();
