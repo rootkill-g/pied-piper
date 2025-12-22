@@ -1,0 +1,37 @@
+package component:api-client;
+
+world api-client {
+    // Import host functions
+    import host;
+    import http;
+    import storage;
+    import crypto;
+    
+    // No exports - we use stdin/stdout for I/O
+}
+
+// Host logging and utilities
+interface host {
+    log: func(message: string);
+    now-millis: func() -> s64;
+    random-u32: func() -> u32;
+}
+
+// HTTP client for external APIs
+interface http {
+    get: func(url: string) -> tuple<u32, list<u8>>;
+    post: func(url: string, body: list<u8>) -> tuple<u32, list<u8>>;
+}
+
+// Persistent key-value storage
+interface storage {
+    get: func(key: string) -> tuple<bool, list<u8>>;
+    set: func(key: string, value: list<u8>) -> bool;
+    delete: func(key: string) -> bool;
+    list-count: func() -> u32;
+}
+
+// Cryptographic functions
+interface crypto {
+    blake3-hash: func(data: list<u8>) -> list<u8>;
+}

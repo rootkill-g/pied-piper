@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{ws::WebSocketUpgrade, Path, State},
     routing::{any, get},
 };
 use std::net::SocketAddr;
@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use super::handler::RequestHandler;
 use super::resolver::ContentResolver;
 use super::tls::TlsConfig;
+use super::websocket::WsHandler;
 use crate::network::NetworkClient;
 use crate::wasm::ModuleLoader;
 
@@ -45,6 +46,7 @@ struct GatewayState {
     #[allow(dead_code)]
     resolver: Arc<ContentResolver>,
     handler: Arc<RequestHandler>,
+    ws_handler: Arc<WsHandler>,
 }
 
 /// HTTP Gateway Server
@@ -71,6 +73,9 @@ impl GatewayServer {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/info", get(info_handler))
+            // WebSocket endpoints
+            .route("/ws/cid/:cid", get(handle_ws_cid))
+            .route("/ws/app/:name", get(handle_ws_app))
             // Direct CID access
             .route("/cid/:cid", any(handle_cid_request))
             .route("/cid/:cid/*path", any(handle_cid_request_with_path))
@@ -151,6 +156,10 @@ impl GatewayServer {
                 self.loader.clone(),
                 self.config.clone(),
             )),
+            ws_handler: Arc::new(WsHandler::new(
+                self.network.clone(),
+                self.loader.clone(),
+            )),
         })
     }
 }
@@ -175,8 +184,10 @@ async fn info_handler(State(state): State<Arc<GatewayState>>) -> Json<serde_json
 async fn handle_cid_request(
     State(state): State<Arc<GatewayState>>,
     method: axum::http::Method,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(cid): axum::extract::Path<String>,
     query: axum::extract::RawQuery,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     let query_str = query.0.as_deref();
     let cid_normalized = cid.trim_end_matches('/');
@@ -184,15 +195,17 @@ async fn handle_cid_request(
 
     state
         .handler
-        .handle_cid_request(cid_normalized, None, method.as_str(), query_str)
+        .handle_cid_request(cid_normalized, None, method.as_str(), query_str, &headers, &body)
         .await
 }
 
 async fn handle_cid_request_with_path(
     State(state): State<Arc<GatewayState>>,
     method: axum::http::Method,
+    headers: axum::http::HeaderMap,
     axum::extract::Path((cid, path)): axum::extract::Path<(String, String)>,
     query: axum::extract::RawQuery,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     let query_str = query.0.as_deref();
     let cid_normalized = cid.trim_end_matches('/');
@@ -200,15 +213,17 @@ async fn handle_cid_request_with_path(
 
     state
         .handler
-        .handle_cid_request(cid_normalized, Some(&path), method.as_str(), query_str)
+        .handle_cid_request(cid_normalized, Some(&path), method.as_str(), query_str, &headers, &body)
         .await
 }
 
 async fn handle_app_request(
     State(state): State<Arc<GatewayState>>,
     method: axum::http::Method,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(name): axum::extract::Path<String>,
     query: axum::extract::RawQuery,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     let query_str = query.0.as_deref();
     let name_normalized = name.trim_end_matches('/');
@@ -216,15 +231,17 @@ async fn handle_app_request(
 
     state
         .handler
-        .handle_app_request(name_normalized, None, method.as_str(), query_str)
+        .handle_app_request(name_normalized, None, method.as_str(), query_str, &headers, &body)
         .await
 }
 
 async fn handle_app_request_with_path(
     State(state): State<Arc<GatewayState>>,
     method: axum::http::Method,
+    headers: axum::http::HeaderMap,
     axum::extract::Path((name, path)): axum::extract::Path<(String, String)>,
     query: axum::extract::RawQuery,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     let query_str = query.0.as_deref();
     let name_normalized = name.trim_end_matches('/');
@@ -232,7 +249,7 @@ async fn handle_app_request_with_path(
 
     state
         .handler
-        .handle_app_request(name_normalized, Some(&path), method.as_str(), query_str)
+        .handle_app_request(name_normalized, Some(&path), method.as_str(), query_str, &headers, &body)
         .await
 }
 
@@ -253,4 +270,24 @@ async fn root_handler() -> axum::response::Html<&'static str> {
 
 async fn not_found_handler() -> axum::response::Html<&'static str> {
     axum::response::Html("<h1>404 - Not Found</h1>")
+}
+
+/// WebSocket handler for CID-based modules
+async fn handle_ws_cid(
+    State(state): State<Arc<GatewayState>>,
+    Path(cid): Path<String>,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    debug!("WebSocket upgrade request for CID: {}", cid);
+    state.ws_handler.clone().handle_ws_cid(ws, cid).await
+}
+
+/// WebSocket handler for named applications
+async fn handle_ws_app(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    debug!("WebSocket upgrade request for app: {}", name);
+    state.ws_handler.clone().handle_ws_app(ws, name).await
 }

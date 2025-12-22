@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tracing::error;
 use wasmtime::*;
 use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView, WasiCtxView};
@@ -265,6 +266,20 @@ impl WasmRuntime {
         let instance = linker
             .instantiate_async(store, module)
             .await
+            .map_err(|e| {
+                // Log the full error chain for debugging
+                let mut error_chain = vec![e.to_string()];
+                let mut current_error = e.source();
+                while let Some(source) = current_error {
+                    error_chain.push(source.to_string());
+                    current_error = source.source();
+                }
+                error!("Failed to instantiate module. Error chain:");
+                for (i, err) in error_chain.iter().enumerate() {
+                    error!("  [{}] {}", i, err);
+                }
+                e
+            })
             .context("Failed to instantiate module")?;
         
         Ok(instance)

@@ -1,0 +1,5 @@
+package component:ws-echo;
+
+world ws-echo {
+    export run: func();
+}

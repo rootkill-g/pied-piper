@@ -28,7 +28,15 @@ impl RequestHandler {
     }
     
     /// Handle a request for a CID-based resource
-    pub async fn handle_cid_request(&self, cid: &str, path: Option<&str>, method: &str, query: Option<&str>) -> Response {
+    pub async fn handle_cid_request(
+        &self, 
+        cid: &str, 
+        path: Option<&str>, 
+        method: &str, 
+        query: Option<&str>,
+        headers: &axum::http::HeaderMap,
+        body: &axum::body::Bytes,
+    ) -> Response {
         debug!("Handling CID request: {} path: {:?} query: {:?} method: {}", cid, path, query, method);
         
         // Fetch module bytes
@@ -56,16 +64,17 @@ impl RequestHandler {
         let path = path_normalized;
         
         // Check if it's a WASM component (magic bytes 0x00 0x61 0x73 0x6d 0x0d)
-        let is_component = bytes.len() >= 5 
+        // or a core WASM module (magic bytes 0x00 0x61 0x73 0x6d 0x01)
+        let is_wasm = bytes.len() >= 5 
             && bytes[0] == 0x00 
             && bytes[1] == 0x61 
             && bytes[2] == 0x73 
             && bytes[3] == 0x6d 
-            && bytes[4] == 0x0d;
+            && (bytes[4] == 0x0d || bytes[4] == 0x01); // 0x0d=component, 0x01=core module
         
-        // If it's a WASM component, execute it as API (components can serve HTML or JSON)
-        if is_component {
-            match self.execute_wasm_api(cid, path, "", method, query).await {
+        // If it's WASM (component or core module), execute it as API
+        if is_wasm {
+            match self.execute_wasm_api(cid, path, body, method, query, headers).await {
                 Ok(response) => response,
                 Err(e) => {
                     error!("Error executing WASM component: {}", e);
@@ -85,7 +94,15 @@ impl RequestHandler {
     }
     
     /// Handle a request for a named application
-    pub async fn handle_app_request(&self, name: &str, path: Option<&str>, method: &str, query: Option<&str>) -> Response {
+    pub async fn handle_app_request(
+        &self, 
+        name: &str, 
+        path: Option<&str>, 
+        method: &str, 
+        query: Option<&str>,
+        headers: &axum::http::HeaderMap,
+        body: &axum::body::Bytes,
+    ) -> Response {
         debug!("Handling app request: {} path: {:?} query: {:?} method: {}", name, path, query, method);
         
         // First, resolve name to CID
@@ -107,7 +124,7 @@ impl RequestHandler {
         };
         
         // Now handle as CID request
-        self.handle_cid_request(&cid, path, method, query).await
+        self.handle_cid_request(&cid, path, method, query, headers, body).await
     }
     
     /// Fetch module bytes from cache or network
@@ -429,7 +446,15 @@ impl RequestHandler {
     }
     
     /// Execute WASM as backend API
-    async fn execute_wasm_api(&self, cid: &str, path: &str, body: &str, method: &str, query: Option<&str>) -> Result<Response> {
+    async fn execute_wasm_api(
+        &self, 
+        cid: &str, 
+        path: &str, 
+        body: &axum::body::Bytes,
+        method: &str, 
+        query: Option<&str>,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<Response> {
         use super::io::{WasmRequest, WasmResponse};
         
         info!("Executing WASM API: {} path: {} method: {} query: {:?}", cid, path, method, query);
@@ -447,12 +472,31 @@ impl RequestHandler {
             format!("/{}", path)
         };
         
+        // Convert body bytes to string (UTF-8)
+        let body_str = String::from_utf8_lossy(body).to_string();
+        
         let mut wasm_request = WasmRequest::new(
             method.to_string(),
             normalized_path,
-            body.to_string(),
-        )
-        .with_content_type("application/json".to_string());
+            body_str,
+        );
+        
+        // Add HTTP headers to WasmRequest
+        for (key, value) in headers.iter() {
+            if let Ok(value_str) = value.to_str() {
+                wasm_request = wasm_request.with_header(
+                    key.as_str().to_string(),
+                    value_str.to_string(),
+                );
+            }
+        }
+        
+        // Set content type from headers if present
+        if let Some(content_type) = headers.get(axum::http::header::CONTENT_TYPE) {
+            if let Ok(ct_str) = content_type.to_str() {
+                wasm_request = wasm_request.with_content_type(ct_str.to_string());
+            }
+        }
         
         // Parse and add query parameters if present
         if let Some(query_str) = query {
@@ -508,7 +552,16 @@ impl RequestHandler {
                     info!("Component executed successfully");
                 }
                 Err(e) => {
-                    warn!("Component execution failed: {}", e);
+                    // Log full error chain for debugging
+                    warn!("Component execution failed: {:?}", e);
+                    
+                    // Build error message with full chain
+                    let mut error_msg = format!("{}", e);
+                    let mut source = e.source();
+                    while let Some(err) = source {
+                        error_msg.push_str(&format!("\n  Caused by: {}", err));
+                        source = err.source();
+                    }
                     
                     return Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -516,7 +569,7 @@ impl RequestHandler {
                         .body(
                             serde_json::json!({
                                 "error": "Component execution failed",
-                                "message": format!("{}", e),
+                                "message": error_msg,
                                 "path": path,
                                 "cid": cid,
                             })
@@ -622,11 +675,13 @@ impl RequestHandler {
         let instance = runtime.instantiate_with_wasi(&mut store, &module).await?;
         info!("Instantiated WASM module");
         
-        // Look for API handler function (convention: _handle_request or handle_request)
+        // Look for API handler function (convention: _handle_request, handle_request, or _start for WASI modules)
         let handler_func_name = if instance.get_func(&mut store, "_handle_request").is_some() {
             "_handle_request"
         } else if instance.get_func(&mut store, "handle_request").is_some() {
             "handle_request"
+        } else if instance.get_func(&mut store, "_start").is_some() {
+            "_start"
         } else {
             // No standard handler found, return helpful error
             return Ok(Response::builder()
@@ -635,7 +690,7 @@ impl RequestHandler {
                 .body(
                     serde_json::json!({
                         "error": "No API handler found",
-                        "message": "Module must export 'handle_request' or '_handle_request' function",
+                        "message": "Module must export 'handle_request', '_handle_request', or '_start' function",
                         "path": path,
                         "cid": cid,
                     })
@@ -711,14 +766,32 @@ impl RequestHandler {
                 }
             }
             Err(e) => {
-                error!("WASM execution error: {}", e);
+                // Log full error chain for debugging
+                let mut error_chain = vec![e.to_string()];
+                let mut current_error = e.source();
+                while let Some(source) = current_error {
+                    error_chain.push(source.to_string());
+                    current_error = source.source();
+                }
+                error!("WASM execution error:");
+                for (i, err) in error_chain.iter().enumerate() {
+                    error!("  [{}] {}", i, err);
+                }
+                
+                // Check stderr for error messages from the module
+                let stderr_bytes = runtime.get_stderr(&store);
+                if !stderr_bytes.is_empty() {
+                    let stderr_str = String::from_utf8_lossy(&stderr_bytes);
+                    error!("WASM stderr: {}", stderr_str);
+                }
+                
                 Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(
                         serde_json::json!({
                             "error": "Execution failed",
-                            "message": e.to_string(),
+                            "message": error_chain.join(" -> "),
                             "path": path,
                             "cid": cid,
                         })

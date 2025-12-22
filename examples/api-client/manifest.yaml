@@ -1,0 +1,5 @@
+name: api-client
+version: 0.1.0
+description: Comprehensive example demonstrating all host functions (HTTP, storage, crypto)
+author: Pied Piper Team
+module: target/wasm32-wasip1/release/api-client.wasm
