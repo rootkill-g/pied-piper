@@ -24,6 +24,30 @@ rustup target add wasm32-wasip1
 
 ### Installation
 
+#### Option 1: Docker (Recommended for Quick Start)
+
+```bash
+# Clone the repository
+git clone https://github.com/rootkill-g/pied-piper
+cd pied-piper
+
+# Start 4-node network with Docker Compose
+docker compose up -d
+
+# Or use the Makefile
+make up
+```
+
+Access nodes at:
+- Bootstrap: http://localhost:8080
+- Node 1: http://localhost:8081
+- Node 2: http://localhost:8082
+- Node 3: http://localhost:8083
+
+**See [DOCKER.md](DOCKER.md) for complete Docker deployment guide.**
+
+#### Option 2: Build from Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/rootkill-g/pied-piper

@@ -1,0 +1,81 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build artifacts
+target/*/
+!target/wasm32-wasip1/release/*.wasm
+!target/release/pied-piper
+examples/**/target/
+*.wasm
+
+# Documentation (not needed in container)
+*.md
+!README.md
+docs/
+
+# Test files
+tests/
+*_test.rs
+test_*.rs
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.tar.gz
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+*.pid
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.local
+
+# Data directories (will be mounted)
+.pied-piper/
+storage/
+cache/
+
+# Config examples (only copy specific configs)
+config.example.yaml
+config.production.yaml
+config.bootstrap.yaml
+config.node*.yaml
+
+# Scripts
+*.sh
+!bundle.sh
+
+# Example builds
+examples/**/target/
+examples/**/*.wasm
+
+# Rust
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock

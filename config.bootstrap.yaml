@@ -1,0 +1,41 @@
+# Pied Piper Bootstrap Node Configuration
+# This is the first node in the network that other nodes will connect to
+
+network:
+  tcp_port: 4001
+  quic_port: 4002
+  enable_mdns: true
+  bootstrap_peers: []
+  topics:
+    - pied-piper
+  max_connections: 100
+  idle_timeout_secs: 60
+
+gateway:
+  port: 8080
+  https_port: 0
+  tls_cert_path: null
+  tls_key_path: null
+  index_file: index.html
+  enable_compression: true
+  request_timeout_secs: 30
+
+storage:
+  data_dir: /home/pied-piper/.pied-piper
+  cache_dir: null
+  dht_dir: null
+  max_cache_size_bytes: 536870912
+  max_cache_entries: 256
+
+performance:
+  worker_threads: 0
+  connection_pool_size: 10
+  pool_timeout_secs: 90
+  tcp_keepalive: true
+  wasm_fuel_limit: 100000000
+  wasm_memory_limit_bytes: 67108864
+
+logging:
+  level: info
+  json_format: false
+  file_path: null
