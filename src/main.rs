@@ -1,6 +1,7 @@
 mod bundle;
 mod cli;
 mod content;
+mod crdt;
 mod gateway;
 mod manifest;
 mod network;
