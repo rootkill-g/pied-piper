@@ -1,15 +1,20 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{Path, State, ws::WebSocketUpgrade},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{Path, State, ws::WebSocketUpgrade, ConnectInfo},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{any, get},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
-use tracing::{debug, info};
+use tower_http::timeout::TimeoutLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tracing::{debug, info, warn};
 
 use super::handler::RequestHandler;
 use super::resolver::ContentResolver;
@@ -17,6 +22,7 @@ use super::tls::TlsConfig;
 use super::websocket::WsHandler;
 use crate::metrics::Metrics;
 use crate::network::NetworkClient;
+use crate::security::SecurityMiddleware;
 use crate::wasm::ModuleLoader;
 
 /// Configuration for the HTTP Gateway
@@ -26,6 +32,7 @@ pub struct GatewayConfig {
     pub https_port: Option<u16>,
     pub index_file: String,
     pub tls_config: Option<TlsConfig>,
+    pub request_timeout_secs: u64,
 }
 
 impl Default for GatewayConfig {
@@ -35,6 +42,7 @@ impl Default for GatewayConfig {
             https_port: None,
             index_file: "index.html".to_string(),
             tls_config: None,
+            request_timeout_secs: 30,
         }
     }
 }
@@ -52,6 +60,7 @@ struct GatewayState {
     handler: Arc<RequestHandler>,
     ws_handler: Arc<WsHandler>,
     metrics: Arc<Metrics>,
+    security: Arc<SecurityMiddleware>,
 }
 
 /// HTTP Gateway Server
@@ -59,6 +68,7 @@ pub struct GatewayServer {
     config: GatewayConfig,
     network: NetworkClient,
     loader: Arc<ModuleLoader>,
+    security_config: crate::config::SecurityConfig,
 }
 
 impl GatewayServer {
@@ -68,12 +78,26 @@ impl GatewayServer {
             config,
             network,
             loader,
+            security_config: crate::config::SecurityConfig::default(),
         }
+    }
+
+    /// Create a new Gateway Server with custom security config
+    pub fn with_security(mut self, security_config: crate::config::SecurityConfig) -> Self {
+        self.security_config = security_config;
+        self
     }
 
     /// Start the Gateway Server
     pub async fn start(&self) -> Result<()> {
         let state = self.create_state();
+
+        // Start background cleanup task for rate limiter
+        SecurityMiddleware::start_cleanup_task(state.security.rate_limiter.clone());
+
+        info!("🔒 Security enabled: rate_limit={}/min, max_body={}MB", 
+            self.security_config.rate_limit_per_minute,
+            self.security_config.max_request_body_size / (1024 * 1024));
 
         let app = Router::new()
             .route("/health", get(health_check))
@@ -92,8 +116,14 @@ impl GatewayServer {
             // Root and Fallback
             .route("/", get(root_handler))
             .fallback(not_found_handler)
-            // Add compression layer (Brotli, Gzip, Deflate)
-            .layer(CompressionLayer::new())
+            // Security, compression, and timeout middleware stack
+            .layer(
+                ServiceBuilder::new()
+                    .layer(middleware::from_fn_with_state(state.clone(), security_middleware))
+                    .layer(RequestBodyLimitLayer::new(self.security_config.max_request_body_size))
+                    .layer(TimeoutLayer::new(Duration::from_secs(self.config.request_timeout_secs)))
+                    .layer(CompressionLayer::new())
+            )
             // Add state
             .with_state(state);
 
@@ -107,7 +137,7 @@ impl GatewayServer {
                 info!("✅ HTTP Gateway listening on http://{}", addr);
 
                 axum_server::bind(addr)
-                    .serve(app.into_make_service())
+                    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                     .await
                     .context("HTTP Gateway server error")
             })
@@ -129,7 +159,7 @@ impl GatewayServer {
                 info!("✅ HTTPS Gateway listening on https://{}", addr);
 
                 axum_server::bind_rustls(addr, rustls_config)
-                    .serve(app.into_make_service())
+                    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                     .await
                     .context("HTTPS Gateway server error")
             }))
@@ -154,6 +184,24 @@ impl GatewayServer {
     fn create_state(&self) -> Arc<GatewayState> {
         let metrics = Arc::new(Metrics::new().expect("Failed to create metrics"));
         
+        // Convert config::SecurityConfig to security::SecurityConfig
+        let security_config = crate::security::SecurityConfig {
+            max_request_body_size: self.security_config.max_request_body_size,
+            max_header_size: self.security_config.max_header_size,
+            rate_limit_per_minute: self.security_config.rate_limit_per_minute,
+            rate_limit_burst: self.security_config.rate_limit_burst,
+            max_connections_per_ip: self.security_config.max_connections_per_ip,
+            max_concurrent_requests: self.security_config.max_concurrent_requests,
+            request_timeout_secs: self.config.request_timeout_secs,
+            enable_hsts: self.security_config.enable_hsts,
+            hsts_max_age: self.security_config.hsts_max_age,
+            enable_strict_csp: self.security_config.enable_strict_csp,
+            cors_allowed_origins: self.security_config.cors_allowed_origins.clone(),
+            block_suspicious_user_agents: self.security_config.block_suspicious_user_agents,
+            max_path_depth: self.security_config.max_path_depth,
+            allowed_extensions: self.security_config.allowed_extensions.clone(),
+        };
+
         Arc::new(GatewayState {
             network: self.network.clone(),
             loader: self.loader.clone(),
@@ -172,8 +220,50 @@ impl GatewayServer {
             ),
             ws_handler: Arc::new(WsHandler::new(self.network.clone(), self.loader.clone())),
             metrics,
+            security: Arc::new(SecurityMiddleware::new(security_config)),
         })
     }
+}
+
+// --- Security Middleware ---
+
+async fn security_middleware(
+    State(state): State<Arc<GatewayState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let ip = addr.ip();
+    let path = req.uri().path().to_string();
+    let headers = req.headers().clone();
+
+    // Skip security checks for health endpoints
+    if path == "/health" || path == "/ready" {
+        return Ok(next.run(req).await);
+    }
+
+    // Rate limiting
+    state.security.rate_limiter.check_rate_limit(ip).await?;
+
+    // Connection tracking
+    state.security.connection_tracker.register_connection(ip).await?;
+
+    // Path validation
+    state.security.validator.validate_path(&path)?;
+
+    // Extension validation
+    state.security.validator.validate_extension(&path)?;
+
+    // Header validation
+    state.security.validator.validate_headers(&headers)?;
+
+    // Execute request
+    let response = next.run(req).await;
+
+    // Unregister connection
+    state.security.connection_tracker.unregister_connection(ip).await;
+
+    Ok(response)
 }
 
 // --- Handlers ---

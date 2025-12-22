@@ -7,6 +7,7 @@ mod gateway;
 mod manifest;
 mod metrics;
 mod network;
+mod security;
 mod wasm;
 
 use anyhow::{Context, Result};
@@ -338,14 +339,29 @@ async fn main() -> Result<()> {
             let cache_dir = std::env::current_dir()?.join(".pied-piper").join("modules");
             let loader = Arc::new(ModuleLoader::new(cache_dir).await?);
 
+            // Load security configuration (use defaults if config file not found)
+            let security_config = if let Some(config_path) = cli.config.as_deref() {
+                match PiedPiperConfig::load(Some(config_path)) {
+                    Ok(cfg) => cfg.security,
+                    Err(e) => {
+                        warn!("Failed to load config, using defaults: {}", e);
+                        crate::config::SecurityConfig::default()
+                    }
+                }
+            } else {
+                crate::config::SecurityConfig::default()
+            };
+
             let gateway_config = GatewayConfig {
                 port,
                 https_port,
                 index_file: "index.html".to_string(),
                 tls_config,
+                request_timeout_secs: 30,
             };
 
-            let server = GatewayServer::new(gateway_config, client, loader);
+            let server = GatewayServer::new(gateway_config, client, loader)
+                .with_security(security_config);
             
             // Set up graceful shutdown
             let shutdown_signal = async {

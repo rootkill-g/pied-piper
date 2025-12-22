@@ -25,6 +25,10 @@ pub struct PiedPiperConfig {
     /// Logging configuration
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Security configuration
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 /// Network P2P configuration
@@ -159,6 +163,62 @@ pub struct LoggingConfig {
     pub file_path: Option<PathBuf>,
 }
 
+/// Security configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Maximum request body size in bytes
+    #[serde(default = "default_max_body_size")]
+    pub max_request_body_size: usize,
+
+    /// Maximum request header size in bytes
+    #[serde(default = "default_max_header_size")]
+    pub max_header_size: usize,
+
+    /// Rate limit: requests per minute per IP
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_per_minute: u32,
+
+    /// Rate limit: burst size
+    #[serde(default = "default_burst_size")]
+    pub rate_limit_burst: u32,
+
+    /// Maximum concurrent connections per IP
+    #[serde(default = "default_max_connections_per_ip")]
+    pub max_connections_per_ip: usize,
+
+    /// Maximum concurrent requests globally
+    #[serde(default = "default_max_concurrent_requests")]
+    pub max_concurrent_requests: usize,
+
+    /// Enable HSTS header
+    #[serde(default = "default_true")]
+    pub enable_hsts: bool,
+
+    /// HSTS max-age in seconds
+    #[serde(default = "default_hsts_max_age")]
+    pub hsts_max_age: u64,
+
+    /// Enable strict CSP
+    #[serde(default = "default_true")]
+    pub enable_strict_csp: bool,
+
+    /// Allowed origins for CORS (empty = no CORS)
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+
+    /// Block suspicious user agents
+    #[serde(default = "default_true")]
+    pub block_suspicious_user_agents: bool,
+
+    /// Maximum path depth
+    #[serde(default = "default_max_path_depth")]
+    pub max_path_depth: usize,
+
+    /// Allowed file extensions for static files
+    #[serde(default = "default_allowed_extensions")]
+    pub allowed_extensions: Vec<String>,
+}
+
 // Default value functions
 fn default_tcp_port() -> u16 {
     0
@@ -207,6 +267,51 @@ fn default_wasm_memory_limit() -> usize {
 }
 fn default_log_level() -> String {
     "info".to_string()
+}
+fn default_max_body_size() -> usize {
+    16 * 1024 * 1024 // 16 MB
+}
+fn default_max_header_size() -> usize {
+    8 * 1024 // 8 KB
+}
+fn default_rate_limit() -> u32 {
+    60
+}
+fn default_burst_size() -> u32 {
+    10
+}
+fn default_max_connections_per_ip() -> usize {
+    100
+}
+fn default_max_concurrent_requests() -> usize {
+    10000
+}
+fn default_hsts_max_age() -> u64 {
+    31536000 // 1 year
+}
+fn default_max_path_depth() -> usize {
+    10
+}
+fn default_allowed_extensions() -> Vec<String> {
+    vec![
+        "html".to_string(),
+        "css".to_string(),
+        "js".to_string(),
+        "wasm".to_string(),
+        "json".to_string(),
+        "png".to_string(),
+        "jpg".to_string(),
+        "jpeg".to_string(),
+        "gif".to_string(),
+        "svg".to_string(),
+        "ico".to_string(),
+        "woff".to_string(),
+        "woff2".to_string(),
+        "ttf".to_string(),
+        "otf".to_string(),
+        "txt".to_string(),
+        "md".to_string(),
+    ]
 }
 
 impl Default for NetworkConfig {
@@ -272,6 +377,26 @@ impl Default for LoggingConfig {
     }
 }
 
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            max_request_body_size: default_max_body_size(),
+            max_header_size: default_max_header_size(),
+            rate_limit_per_minute: default_rate_limit(),
+            rate_limit_burst: default_burst_size(),
+            max_connections_per_ip: default_max_connections_per_ip(),
+            max_concurrent_requests: default_max_concurrent_requests(),
+            enable_hsts: default_true(),
+            hsts_max_age: default_hsts_max_age(),
+            enable_strict_csp: default_true(),
+            cors_allowed_origins: vec![],
+            block_suspicious_user_agents: default_true(),
+            max_path_depth: default_max_path_depth(),
+            allowed_extensions: default_allowed_extensions(),
+        }
+    }
+}
+
 impl Default for PiedPiperConfig {
     fn default() -> Self {
         Self {
@@ -280,6 +405,7 @@ impl Default for PiedPiperConfig {
             storage: StorageConfig::default(),
             performance: PerformanceConfig::default(),
             logging: LoggingConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -437,6 +563,7 @@ impl PiedPiperConfig {
                 json_format: false,
                 file_path: None,
             },
+            security: SecurityConfig::default(),
         };
 
         serde_yaml::to_string(&example).unwrap_or_else(|_| "# Error generating example".to_string())
@@ -485,6 +612,7 @@ impl PiedPiperConfig {
                 json_format: false,
                 file_path: None,
             },
+            security: SecurityConfig::default(),
         };
 
         toml::to_string_pretty(&example).unwrap_or_else(|_| "# Error generating example".to_string())
