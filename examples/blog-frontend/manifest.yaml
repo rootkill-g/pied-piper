@@ -1,0 +1,10 @@
+name: blog-frontend
+version: 0.1.0
+description: Frontend UI for the static-blog API
+author: Pied Piper
+
+# Asset files to bundle
+assets:
+  - index.html
+  - styles.css
+  - app.js

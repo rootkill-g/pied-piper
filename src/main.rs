@@ -8,6 +8,7 @@ mod manifest;
 mod metrics;
 mod network;
 mod security;
+mod storage;
 mod wasm;
 
 use anyhow::{Context, Result};

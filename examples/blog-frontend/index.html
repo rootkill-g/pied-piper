@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pied Piper Blog</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📝 Pied Piper Blog</h1>
+            <p class="subtitle">Decentralized blogging on P2P network with persistent storage</p>
+        </header>
+        
+        <main>
+            <!-- Create Post Section -->
+            <div class="card">
+                <h2>Create New Post</h2>
+                <form id="createForm">
+                    <input type="text" id="title" placeholder="Post Title" required maxlength="200">
+                    <textarea id="content" placeholder="Post Content" required maxlength="50000" rows="6"></textarea>
+                    <button type="submit">Create Post</button>
+                </form>
+            </div>
+            
+            <!-- Posts List Section -->
+            <div class="card">
+                <div class="posts-header">
+                    <h2>All Posts</h2>
+                    <button onclick="loadPosts()" class="refresh-btn">🔄 Refresh</button>
+                </div>
+                <div id="postsContainer">
+                    <p class="loading">Loading posts...</p>
+                </div>
+            </div>
+            
+            <!-- API Configuration -->
+            <div class="card config-card">
+                <h3>API Configuration</h3>
+                <label>API Module CID:</label>
+                <input type="text" id="apiCid" value="b3fartwhbq6i5gzzrj7vwmafopfj3c7kvxqj7i4k7tdrm4izpjtyq" style="width: 100%; padding: 8px; margin-top: 5px; font-family: monospace;">
+                <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                    Change this CID to point to your deployed static-blog API module
+                </p>
+            </div>
+        </main>
+        
+        <footer>
+            <p>Powered by Pied Piper - Posts stored persistently at ~/.pied-piper/storage/</p>
+        </footer>
+    </div>
+    
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Edit Post</h2>
+            <form id="editForm">
+                <input type="hidden" id="editId">
+                <input type="text" id="editTitle" placeholder="Post Title" required maxlength="200">
+                <textarea id="editContent" placeholder="Post Content" required maxlength="50000" rows="6"></textarea>
+                <div class="modal-buttons">
+                    <button type="submit">Update Post</button>
+                    <button type="button" onclick="closeEditModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

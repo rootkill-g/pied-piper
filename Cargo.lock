@@ -3479,6 +3479,7 @@ dependencies = [
  "config",
  "dirs",
  "futures",
+ "hex",
  "hyper",
  "hyper-util",
  "libp2p",

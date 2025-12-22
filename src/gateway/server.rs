@@ -108,9 +108,11 @@ impl GatewayServer {
             .route("/ws/cid/:cid", get(handle_ws_cid))
             .route("/ws/app/:name", get(handle_ws_app))
             // Direct CID access
+            .route("/cid/:cid/", any(handle_cid_request))  // Handle trailing slash explicitly
             .route("/cid/:cid", any(handle_cid_request))
             .route("/cid/:cid/*path", any(handle_cid_request_with_path))
             // Named app access
+            .route("/app/:name/", any(handle_app_request))  // Handle trailing slash explicitly
             .route("/app/:name", any(handle_app_request))
             .route("/app/:name/*path", any(handle_app_request_with_path))
             // Root and Fallback
@@ -184,6 +186,21 @@ impl GatewayServer {
     fn create_state(&self) -> Arc<GatewayState> {
         let metrics = Arc::new(Metrics::new().expect("Failed to create metrics"));
         
+        // Create persistent storage
+        let storage_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".pied-piper")
+            .join("storage");
+        
+        let storage = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                crate::storage::PersistentStorage::new(&storage_path)
+                    .await
+                    .expect("Failed to create persistent storage")
+            })
+        });
+        let storage = Arc::new(storage);
+        
         // Convert config::SecurityConfig to security::SecurityConfig
         let security_config = crate::security::SecurityConfig {
             max_request_body_size: self.security_config.max_request_body_size,
@@ -215,6 +232,7 @@ impl GatewayServer {
                     self.network.clone(),
                     self.loader.clone(),
                     self.config.clone(),
+                    storage.clone(),
                 )
                 .with_metrics(metrics.clone())
             ),

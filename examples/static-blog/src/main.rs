@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Post {
@@ -30,48 +31,54 @@ struct UpdatePost {
 struct Request {
     method: String,
     path: String,
-    query: Option<String>,
-    body: Option<String>,
+    #[serde(default)]
+    query: HashMap<String, String>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    body: String,
 }
 
 #[derive(Debug, Serialize)]
 struct Response {
     status: u16,
     body: String,
-    headers: Vec<(String, String)>,
+    headers: HashMap<String, String>,
 }
 
 mod host {
-    #[link(wasm_import_module = "host")]
+    #[link(wasm_import_module = "env")]
     extern "C" {
-        fn storage_get_v2(key_ptr: *const u8, key_len: usize) -> i32;
-        fn storage_set_v2(
+        fn host_storage_get(key_ptr: *const u8, key_len: usize, val_ptr: *mut u8, val_len_ptr: *mut usize) -> i32;
+        fn host_storage_set(
             key_ptr: *const u8,
             key_len: usize,
             value_ptr: *const u8,
             value_len: usize,
         ) -> i32;
-        fn storage_delete_v2(key_ptr: *const u8, key_len: usize) -> i32;
-        fn host_get_result(ptr: *mut u8, len: usize) -> usize;
-        fn host_now_millis() -> u64;
+        fn host_storage_delete(key_ptr: *const u8, key_len: usize) -> i32;
+        fn host_now_millis() -> i64;
     }
 
     pub fn storage_get(key: &str) -> Option<String> {
         unsafe {
-            let ret = storage_get_v2(key.as_ptr(), key.len());
-            if ret < 0 {
-                return None;
+            let mut val_len: u32 = 1024; // Start with reasonable size
+            let mut buffer = vec![0u8; val_len as usize];
+            let ret = host_storage_get(key.as_ptr(), key.len(), buffer.as_mut_ptr(), &mut val_len as *mut u32 as *mut usize);
+            if ret == 0 {
+                return None;  // Not found
             }
-            let size = ret as usize;
-            let mut buffer = vec![0u8; size];
-            host_get_result(buffer.as_mut_ptr(), size);
+            if val_len > buffer.len() as u32 {
+                buffer.resize(val_len as usize, 0);
+                host_storage_get(key.as_ptr(), key.len(), buffer.as_mut_ptr(), &mut val_len as *mut u32 as *mut usize);
+            }
+            buffer.truncate(val_len as usize);
             String::from_utf8(buffer).ok()
         }
     }
 
     pub fn storage_set(key: &str, value: &str) -> bool {
         unsafe {
-            let ret = storage_set_v2(
+            let ret = host_storage_set(
                 key.as_ptr(),
                 key.len(),
                 value.as_ptr(),
@@ -83,13 +90,13 @@ mod host {
 
     pub fn storage_delete(key: &str) -> bool {
         unsafe {
-            let ret = storage_delete_v2(key.as_ptr(), key.len());
+            let ret = host_storage_delete(key.as_ptr(), key.len());
             ret >= 0
         }
     }
 
     pub fn now_millis() -> u64 {
-        unsafe { host_now_millis() }
+        unsafe { host_now_millis() as u64 }
     }
 }
 
@@ -213,163 +220,68 @@ fn delete_post(id: &str) -> Result<(), String> {
     }
 }
 
-fn parse_query(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter_map(|pair| {
-            let mut parts = pair.split('=');
-            let key = parts.next()?;
-            let value = parts.next()?;
-            Some((key.to_string(), value.to_string()))
-        })
-        .collect()
+fn json_response(status: u16, body: String) -> Response {
+    let mut headers = HashMap::new();
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    Response { status, body, headers }
 }
 
 fn handle_api_request(req: Request) -> Response {
     let method = req.method.as_str();
     let path = req.path.as_str();
 
-    let query_params: Vec<(String, String)> = req
-        .query
-        .as_ref()
-        .map(|q| parse_query(q))
-        .unwrap_or_default();
-
-    let id_param = query_params
-        .iter()
-        .find(|(k, _)| k == "id")
-        .map(|(_, v)| v.as_str());
+    let id_param = req.query.get("id").map(|s| s.as_str());
 
     match (method, path) {
         ("GET", "/api/posts") => {
             if let Some(id) = id_param {
                 match get_post(id) {
-                    Some(post) => Response {
-                        status: 200,
-                        body: serde_json::to_string(&post).unwrap(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
-                    None => Response {
-                        status: 404,
-                        body: r#"{"error":"Post not found"}"#.to_string(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
+                    Some(post) => json_response(200, serde_json::to_string(&post).unwrap()),
+                    None => json_response(404, r#"{"error":"Post not found"}"#.to_string()),
                 }
             } else {
                 let posts = list_posts();
-                Response {
-                    status: 200,
-                    body: serde_json::to_string(&posts).unwrap(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                }
+                json_response(200, serde_json::to_string(&posts).unwrap())
             }
         }
 
         ("POST", "/api/posts") => {
-            let body = req.body.unwrap_or_default();
-            match serde_json::from_str::<CreatePost>(&body) {
+            match serde_json::from_str::<CreatePost>(&req.body) {
                 Ok(create_req) => match create_post(create_req.title, create_req.content) {
-                    Ok(post) => Response {
-                        status: 201,
-                        body: serde_json::to_string(&post).unwrap(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
-                    Err(err) => Response {
-                        status: 500,
-                        body: format!(r#"{{"error":"{}"}}"#, err),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
+                    Ok(post) => json_response(201, serde_json::to_string(&post).unwrap()),
+                    Err(err) => json_response(500, format!(r#"{{"error":"{}"}}"#, err)),
                 },
-                Err(_) => Response {
-                    status: 400,
-                    body: r#"{"error":"Invalid request body"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                },
+                Err(_) => json_response(400, r#"{"error":"Invalid request body"}"#.to_string()),
             }
         }
 
         ("PUT", "/api/posts") => {
-            let body = req.body.unwrap_or_default();
-            match serde_json::from_str::<UpdatePost>(&body) {
+            match serde_json::from_str::<UpdatePost>(&req.body) {
                 Ok(update_req) => {
                     match update_post(update_req.id, update_req.title, update_req.content) {
-                        Ok(post) => Response {
-                            status: 200,
-                            body: serde_json::to_string(&post).unwrap(),
-                            headers: vec![
-                                ("Content-Type".to_string(), "application/json".to_string())
-                            ],
-                        },
+                        Ok(post) => json_response(200, serde_json::to_string(&post).unwrap()),
                         Err(err) => {
                             let status = if err.contains("not found") { 404 } else { 500 };
-                            Response {
-                                status,
-                                body: format!(r#"{{"error":"{}"}}"#, err),
-                                headers: vec![
-                                    ("Content-Type".to_string(), "application/json".to_string())
-                                ],
-                            }
+                            json_response(status, format!(r#"{{"error":"{}"}}"#, err))
                         }
                     }
                 }
-                Err(_) => Response {
-                    status: 400,
-                    body: r#"{"error":"Invalid request body"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                },
+                Err(_) => json_response(400, r#"{"error":"Invalid request body"}"#.to_string()),
             }
         }
 
         ("DELETE", "/api/posts") => {
             if let Some(id) = id_param {
                 match delete_post(id) {
-                    Ok(_) => Response {
-                        status: 200,
-                        body: r#"{"success":true}"#.to_string(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
-                    Err(err) => Response {
-                        status: 500,
-                        body: format!(r#"{{"error":"{}"}}"#, err),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
+                    Ok(_) => json_response(200, r#"{"success":true}"#.to_string()),
+                    Err(err) => json_response(500, format!(r#"{{"error":"{}"}}"#, err)),
                 }
             } else {
-                Response {
-                    status: 400,
-                    body: r#"{"error":"Missing id parameter"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                }
+                json_response(400, r#"{"error":"Missing id parameter"}"#.to_string())
             }
         }
 
-        _ => Response {
-            status: 404,
-            body: r#"{"error":"Not found"}"#.to_string(),
-            headers: vec![
-                ("Content-Type".to_string(), "application/json".to_string())
-            ],
-        },
+        _ => json_response(404, r#"{"error":"Not found"}"#.to_string()),
     }
 }
 
@@ -380,13 +292,7 @@ fn main() {
     let request: Request = match serde_json::from_str(&input) {
         Ok(req) => req,
         Err(e) => {
-            let error_response = Response {
-                status: 400,
-                body: format!(r#"{{"error":"Invalid request: {}"}}"#, e),
-                headers: vec![
-                    ("Content-Type".to_string(), "application/json".to_string())
-                ],
-            };
+            let error_response = json_response(400, format!(r#"{{"error":"Invalid request: {}"}}"#, e));
             let output = serde_json::to_string(&error_response).unwrap();
             print!("{}", output);
             return;
@@ -395,13 +301,7 @@ fn main() {
 
     // Only handle API requests; gateway serves static assets
     if !request.path.starts_with("/api/") {
-        let error_response = Response {
-            status: 404,
-            body: r#"{"error":"Not found"}"#.to_string(),
-            headers: vec![
-                ("Content-Type".to_string(), "application/json".to_string())
-            ],
-        };
+        let error_response = json_response(404, r#"{"error":"Not found"}"#.to_string());
         let output = serde_json::to_string(&error_response).unwrap();
         print!("{}", output);
         return;

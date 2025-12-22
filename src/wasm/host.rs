@@ -12,8 +12,10 @@ pub struct HostFunctions {
     state: Arc<RwLock<HostState>>,
     /// HTTP client for network requests
     http_client: reqwest::Client,
-    /// Key-value storage
+    /// Key-value storage (in-memory only, for backwards compat)
     storage: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+    /// Persistent storage
+    persistent_storage: Option<Arc<crate::storage::PersistentStorage>>,
 }
 
 /// State shared between host functions
@@ -38,6 +40,43 @@ impl HostFunctions {
                 .build()
                 .unwrap(),
             storage: Arc::new(RwLock::new(HashMap::new())),
+            persistent_storage: None,
+        }
+    }
+
+    /// Create new host functions with shared storage
+    pub fn with_storage(storage: Arc<RwLock<HashMap<String, Vec<u8>>>>) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(HostState {
+                log_messages: Vec::new(),
+            })),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap(),
+            storage,
+            persistent_storage: None,
+        }
+    }
+
+    /// Create new host functions with persistent storage
+    pub fn with_persistent_storage(storage: Arc<crate::storage::PersistentStorage>) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(HostState {
+                log_messages: Vec::new(),
+            })),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap(),
+            storage: storage.as_hashmap(),
+            persistent_storage: Some(storage),
         }
     }
 
@@ -111,8 +150,14 @@ impl HostFunctions {
         NetworkHostFunctions::add_http_functions_v2(linker, self.http_client.clone())?;
 
         // Add storage functions (both v1 and v2)
-        StorageHostFunctions::add_storage_functions(linker, self.storage.clone())?;
-        StorageHostFunctions::add_storage_functions_v2(linker, self.storage.clone())?;
+        if let Some(ref persistent_storage) = self.persistent_storage {
+            // Use persistent storage
+            StorageHostFunctions::add_persistent_storage_functions_v2(linker, persistent_storage.clone())?;
+        } else {
+            // Use in-memory storage (backwards compat)
+            StorageHostFunctions::add_storage_functions(linker, self.storage.clone())?;
+            StorageHostFunctions::add_storage_functions_v2(linker, self.storage.clone())?;
+        }
 
         // Add crypto functions (both v1 and v2)
         CryptoHostFunctions::add_crypto_functions(linker)?;
@@ -741,7 +786,7 @@ impl StorageHostFunctions {
                   key_len: i32,
                   val_ptr: i32,
                   val_len_ptr: i32|
-                  -> Result<u32> {
+                  -> Result<i32> {
                 let memory = match caller.get_export("memory") {
                     Some(Extern::Memory(mem)) => mem,
                     _ => anyhow::bail!("Failed to find memory export"),
@@ -812,7 +857,7 @@ impl StorageHostFunctions {
                   key_len: i32,
                   val_ptr: i32,
                   val_len: i32|
-                  -> Result<u32> {
+                  -> Result<i32> {
                 let memory = match caller.get_export("memory") {
                     Some(Extern::Memory(mem)) => mem,
                     _ => anyhow::bail!("Failed to find memory export"),
@@ -855,7 +900,7 @@ impl StorageHostFunctions {
             move |mut caller: Caller<'_, crate::wasm::runtime::WasiState>,
                   key_ptr: i32,
                   key_len: i32|
-                  -> Result<u32> {
+                  -> Result<i32> {
                 let memory = match caller.get_export("memory") {
                     Some(Extern::Memory(mem)) => mem,
                     _ => anyhow::bail!("Failed to find memory export"),
@@ -888,7 +933,7 @@ impl StorageHostFunctions {
         linker.func_wrap(
             "env",
             "host_storage_count",
-            move |_caller: Caller<'_, crate::wasm::runtime::WasiState>| -> Result<u32> {
+            move |_caller: Caller<'_, crate::wasm::runtime::WasiState>| -> Result<i32> {
                 let storage_clone = storage_count.clone();
                 let count = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
@@ -897,11 +942,165 @@ impl StorageHostFunctions {
                     })
                 });
 
-                Ok(count as u32)
+                Ok(count as i32)
             },
         )?;
 
         debug!("Added storage v2 functions to linker");
+        Ok(())
+    }
+
+    /// Add v2 storage functions using PersistentStorage
+    pub fn add_persistent_storage_functions_v2(
+        linker: &mut Linker<crate::wasm::runtime::WasiState>,
+        storage: Arc<crate::storage::PersistentStorage>,
+    ) -> Result<()> {
+        // host_storage_get
+        let storage_get = storage.clone();
+        linker.func_wrap(
+            "env",
+            "host_storage_get",
+            move |mut caller: Caller<'_, crate::wasm::runtime::WasiState>,
+                  key_ptr: i32,
+                  key_len: i32,
+                  val_ptr: i32,
+                  val_len_ptr: i32|
+                  -> Result<i32> {
+                let memory = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => anyhow::bail!("Failed to find memory export"),
+                };
+
+                // Read key
+                let key_bytes = memory
+                    .data(&caller)
+                    .get(key_ptr as usize..(key_ptr + key_len) as usize)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid memory access for key"))?;
+                let key = String::from_utf8_lossy(key_bytes).to_string();
+
+                debug!("host_storage_get: {}", key);
+
+                // Get from persistent storage
+                let value = storage_get.get_sync(&key);
+
+                match value {
+                    Some(val) => {
+                        // Read max value length
+                        let mem_data = memory.data(&caller);
+                        let val_len_bytes = mem_data
+                            .get(val_len_ptr as usize..(val_len_ptr as usize + 4))
+                            .ok_or_else(|| anyhow::anyhow!("Invalid memory access for val_len"))?;
+                        let max_val_len = u32::from_le_bytes([
+                            val_len_bytes[0],
+                            val_len_bytes[1],
+                            val_len_bytes[2],
+                            val_len_bytes[3],
+                        ]) as usize;
+
+                        // Write value to memory
+                        let write_len = std::cmp::min(val.len(), max_val_len);
+                        let mem_data_mut = memory.data_mut(&mut caller);
+                        let val_slice = mem_data_mut
+                            .get_mut(val_ptr as usize..(val_ptr as usize + write_len))
+                            .ok_or_else(|| anyhow::anyhow!("Invalid memory access for val"))?;
+                        val_slice.copy_from_slice(&val[..write_len]);
+
+                        // Write actual length
+                        let len_slice = mem_data_mut
+                            .get_mut(val_len_ptr as usize..(val_len_ptr as usize + 4))
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("Invalid memory access for val_len write")
+                            })?;
+                        len_slice.copy_from_slice(&(write_len as u32).to_le_bytes());
+
+                        Ok(1) // Found
+                    }
+                    None => Ok(0), // Not found
+                }
+            },
+        )?;
+
+        // host_storage_set
+        let storage_set = storage.clone();
+        linker.func_wrap(
+            "env",
+            "host_storage_set",
+            move |mut caller: Caller<'_, crate::wasm::runtime::WasiState>,
+                  key_ptr: i32,
+                  key_len: i32,
+                  val_ptr: i32,
+                  val_len: i32|
+                  -> Result<i32> {
+                let memory = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => anyhow::bail!("Failed to find memory export"),
+                };
+
+                // Read key
+                let key_bytes = memory
+                    .data(&caller)
+                    .get(key_ptr as usize..(key_ptr + key_len) as usize)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid memory access for key"))?;
+                let key = String::from_utf8_lossy(key_bytes).to_string();
+
+                // Read value
+                let val_bytes = memory
+                    .data(&caller)
+                    .get(val_ptr as usize..(val_ptr + val_len) as usize)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid memory access for val"))?
+                    .to_vec();
+
+                debug!("host_storage_set: {} ({} bytes)", key, val_bytes.len());
+
+                // Store to persistent storage
+                storage_set.set_sync(&key, val_bytes)?;
+
+                Ok(1)
+            },
+        )?;
+
+        // host_storage_delete
+        let storage_delete = storage.clone();
+        linker.func_wrap(
+            "env",
+            "host_storage_delete",
+            move |mut caller: Caller<'_, crate::wasm::runtime::WasiState>,
+                  key_ptr: i32,
+                  key_len: i32|
+                  -> Result<i32> {
+                let memory = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => anyhow::bail!("Failed to find memory export"),
+                };
+
+                // Read key
+                let key_bytes = memory
+                    .data(&caller)
+                    .get(key_ptr as usize..(key_ptr + key_len) as usize)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid memory access for key"))?;
+                let key = String::from_utf8_lossy(key_bytes).to_string();
+
+                debug!("host_storage_delete: {}", key);
+
+                // Delete from persistent storage
+                storage_delete.delete_sync(&key)?;
+
+                Ok(1)
+            },
+        )?;
+
+        // host_storage_count
+        let storage_count = storage.clone();
+        linker.func_wrap(
+            "env",
+            "host_storage_count",
+            move |_caller: Caller<'_, crate::wasm::runtime::WasiState>| -> Result<i32> {
+                let count = storage_count.len_sync();
+                Ok(count as i32)
+            },
+        )?;
+
+        debug!("Added persistent storage v2 functions to linker");
         Ok(())
     }
 }

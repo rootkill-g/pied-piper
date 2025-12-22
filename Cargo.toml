@@ -16,6 +16,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 config = "0.14.1"
 dirs = "5.0.1"
 futures = "0.3.31"
+hex = "0.4"
 hyper = { version = "1.5.2", features = ["server", "http1"] }
 hyper-util = { version = "0.1.10", features = ["tokio"] }
 libp2p = { version = "0.56.0", features = ["tokio", "tcp", "quic", "noise", "yamux", "gossipsub", "kad", "mdns", "identify", "macros", "ping", "request-response", "cbor", "json", "relay", "dcutr"] }

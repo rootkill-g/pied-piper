@@ -5,12 +5,12 @@ use axum::{
 };
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use super::server::GatewayConfig;
 use crate::metrics::Metrics;
 use crate::network::NetworkClient;
+use crate::storage::PersistentStorage;
 use crate::wasm::{ModuleLoader, WasmRuntime, WasmRuntimeConfig};
 
 /// Handles HTTP requests and routes them to WASM modules
@@ -19,15 +19,18 @@ pub struct RequestHandler {
     loader: Arc<ModuleLoader>,
     config: GatewayConfig,
     metrics: Option<Arc<Metrics>>,
+    /// Shared storage for WASM modules
+    storage: Arc<PersistentStorage>,
 }
 
 impl RequestHandler {
-    pub fn new(network: NetworkClient, loader: Arc<ModuleLoader>, config: GatewayConfig) -> Self {
+    pub fn new(network: NetworkClient, loader: Arc<ModuleLoader>, config: GatewayConfig, storage: Arc<PersistentStorage>) -> Self {
         Self {
             network,
             loader,
             config,
             metrics: None,
+            storage,
         }
     }
 
@@ -82,7 +85,10 @@ impl RequestHandler {
 
         // Determine request type
         // Treat empty string path same as None (normalize trailing slash)
-        let path_normalized = path.filter(|p| !p.is_empty()).unwrap_or("");
+        let path_normalized = path
+            .map(|p| p.trim_matches('/'))  // Remove leading/trailing slashes
+            .filter(|p| !p.is_empty())     // Filter out empty strings
+            .unwrap_or("");                // Default to empty string
         debug!(
             "Path after normalization: '{}' (was {:?})",
             path_normalized, path
@@ -842,8 +848,8 @@ impl RequestHandler {
         // Create store with stdin containing the request
         let mut store = runtime.create_store_with_stdin(request_json.into_bytes())?;
 
-        // Instantiate with WASI
-        let instance = runtime.instantiate_with_wasi(&mut store, &module).await?;
+        // Instantiate with WASI and persistent storage
+        let instance = runtime.instantiate_with_persistent_storage(&mut store, &module, self.storage.clone()).await?;
         info!("Instantiated WASM module");
 
         // Look for API handler function (convention: _handle_request, handle_request, or _start for WASI modules)

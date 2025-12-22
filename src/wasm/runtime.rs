@@ -280,11 +280,65 @@ impl WasmRuntime {
         store: &mut Store<WasiState>,
         module: &Module,
     ) -> Result<Instance> {
+        self.instantiate_with_wasi_and_storage(store, module, None).await
+    }
+
+    /// Instantiate a module with WASI and optional shared storage
+    pub async fn instantiate_with_wasi_and_storage(
+        &self,
+        store: &mut Store<WasiState>,
+        module: &Module,
+        storage: Option<Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<u8>>>>>,
+    ) -> Result<Instance> {
         // Create a linker for core modules
         let mut linker = Linker::new(&self.engine);
 
         // Wire host functions for core modules (HTTP, storage, crypto, etc.)
-        let host_functions = HostFunctions::new();
+        let host_functions = if let Some(storage) = storage {
+            HostFunctions::with_storage(storage)
+        } else {
+            HostFunctions::new()
+        };
+        host_functions.add_to_linker(&mut linker)?;
+
+        // Wire WASI Preview 1 for core modules
+        wasmtime_wasi::p1::add_to_linker_async(&mut linker, |state| &mut state.wasi_p1)
+            .context("Failed to add WASI P1 to core linker")?;
+
+        // Instantiate the module
+        let instance = linker
+            .instantiate_async(store, module)
+            .await
+            .map_err(|e| {
+                // Log the full error chain for debugging
+                let mut error_chain = vec![e.to_string()];
+                let mut current_error = e.source();
+                while let Some(source) = current_error {
+                    error_chain.push(source.to_string());
+                    current_error = source.source();
+                }
+                error!("Failed to instantiate module. Error chain:");
+                for (i, err) in error_chain.iter().enumerate() {
+                    error!("  {}: {}", i, err);
+                }
+                e
+            })?;
+
+        Ok(instance)
+    }
+
+    /// Instantiate a module with WASI and persistent storage
+    pub async fn instantiate_with_persistent_storage(
+        &self,
+        store: &mut Store<WasiState>,
+        module: &Module,
+        storage: Arc<crate::storage::PersistentStorage>,
+    ) -> Result<Instance> {
+        // Create a linker for core modules
+        let mut linker = Linker::new(&self.engine);
+
+        // Wire host functions with persistent storage
+        let host_functions = HostFunctions::with_persistent_storage(storage);
         host_functions.add_to_linker(&mut linker)?;
 
         // Wire WASI Preview 1 for core modules
