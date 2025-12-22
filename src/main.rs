@@ -1,5 +1,6 @@
 mod bundle;
 mod cli;
+mod config;
 mod content;
 mod crdt;
 mod gateway;
@@ -18,7 +19,8 @@ use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::cli::{Cli, Commands};
+use crate::cli::{Cli, Commands, ConfigAction};
+use crate::config::PiedPiperConfig;
 use crate::gateway::{GatewayConfig, GatewayServer};
 use crate::network::{NetworkNode, NetworkNodeConfig};
 use crate::wasm::loader::ModuleCid;
@@ -37,6 +39,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse_args();
 
     match cli.command {
+        Commands::Config { action } => {
+            handle_config_command(action, cli.config.as_deref())?;
+        }
+
         Commands::Daemon {
             tcp_port,
             quic_port,
@@ -474,4 +480,62 @@ fn resolve_manifest_module(path: &PathBuf, manifest: &AppManifest) -> Result<Pat
 
     let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     Ok(base_dir.join(module))
+}
+
+/// Handle configuration subcommands
+fn handle_config_command(action: ConfigAction, _config_path: Option<&std::path::Path>) -> Result<()> {
+    match action {
+        ConfigAction::Init { output, format, force } => {
+            if output.exists() && !force {
+                anyhow::bail!(
+                    "Config file '{}' already exists. Use --force to overwrite.",
+                    output.display()
+                );
+            }
+
+            let content = match format.as_str() {
+                "yaml" | "yml" => PiedPiperConfig::example_yaml(),
+                "toml" => PiedPiperConfig::example_toml(),
+                "json" => serde_json::to_string_pretty(&PiedPiperConfig::default())?,
+                _ => anyhow::bail!("Unsupported format '{}'. Use yaml, toml, or json.", format),
+            };
+
+            std::fs::write(&output, content)
+                .with_context(|| format!("Failed to write config to {}", output.display()))?;
+
+            info!("✅ Created example configuration file: {}", output.display());
+            println!("Configuration file created: {}", output.display());
+            println!("\nEdit the file to customize your settings, then run:");
+            println!("  pied-piper --config {} gateway", output.display());
+        }
+
+        ConfigAction::Validate { config_file } => {
+            if !config_file.exists() {
+                anyhow::bail!("Config file not found: {}", config_file.display());
+            }
+
+            match PiedPiperConfig::load(Some(&config_file)) {
+                Ok(_config) => {
+                    info!("✅ Configuration is valid");
+                    println!("✅ Configuration file is valid: {}", config_file.display());
+                }
+                Err(e) => {
+                    error!("❌ Configuration validation failed: {}", e);
+                    anyhow::bail!("Invalid configuration: {}", e);
+                }
+            }
+        }
+
+        ConfigAction::Show { json } => {
+            let config = PiedPiperConfig::load(None)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&config)?);
+            } else {
+                println!("{}", serde_yaml::to_string(&config)?);
+            }
+        }
+    }
+
+    Ok(())
 }

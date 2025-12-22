@@ -151,6 +151,43 @@ pub enum Commands {
         #[arg(long, default_value = "30")]
         timeout: u64,
     },
+
+    /// Configuration management commands
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Generate an example configuration file
+    Init {
+        /// Output file path
+        #[arg(default_value = "pied-piper.yaml")]
+        output: PathBuf,
+
+        /// Configuration format (yaml, toml, json)
+        #[arg(short, long, default_value = "yaml")]
+        format: String,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Validate a configuration file
+    Validate {
+        /// Configuration file to validate
+        config_file: PathBuf,
+    },
+
+    /// Show current configuration (resolved with env vars)
+    Show {
+        /// Show as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 impl Cli {

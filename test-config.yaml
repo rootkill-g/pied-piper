@@ -1,0 +1,6 @@
+network:
+  tcp_port: 5001
+  quic_port: 5002
+
+gateway:
+  port: 9090

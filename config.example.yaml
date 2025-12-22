@@ -1,0 +1,115 @@
+# Pied Piper Configuration Example
+# 
+# This file shows all available configuration options with their default values.
+# Copy this file and customize it for your deployment.
+#
+# Configuration precedence: CLI args > Environment variables > Config file > Defaults
+#
+# Environment variables use PP_ prefix: PP_GATEWAY_PORT=8080, PP_NETWORK_TCP_PORT=4001, etc.
+
+# ========================================
+# Network P2P Configuration
+# ========================================
+network:
+  # TCP listening port (0 for random port assignment)
+  tcp_port: 4001
+  
+  # QUIC listening port (0 for random port assignment)
+  quic_port: 4002
+  
+  # Enable mDNS for automatic local peer discovery
+  enable_mdns: true
+  
+  # Bootstrap peers for initial network connection
+  # Format: peer_id@multiaddr
+  # Example: 12D3KooWExamplePeer@/ip4/203.0.113.1/tcp/4001
+  bootstrap_peers: []
+  
+  # GossipSub topics to subscribe to
+  topics:
+    - pied-piper
+  
+  # Maximum number of concurrent connections
+  max_connections: 100
+  
+  # Connection idle timeout in seconds
+  idle_timeout_secs: 60
+
+# ========================================
+# Gateway HTTP Server Configuration
+# ========================================
+gateway:
+  # HTTP server listening port
+  port: 8080
+  
+  # HTTPS server port (set to 0 to disable HTTPS)
+  https_port: 0
+  
+  # Path to TLS certificate file (required if https_port > 0)
+  tls_cert_path: null
+  
+  # Path to TLS private key file (required if https_port > 0)
+  tls_key_path: null
+  
+  # Default index file for directory requests
+  index_file: index.html
+  
+  # Enable response compression (Brotli, Gzip, Deflate)
+  enable_compression: true
+  
+  # Request timeout in seconds
+  request_timeout_secs: 30
+
+# ========================================
+# Storage and Cache Configuration
+# ========================================
+storage:
+  # Main data directory for all persistent storage
+  data_dir: .pied-piper
+  
+  # Module cache directory (defaults to data_dir/modules)
+  cache_dir: null
+  
+  # DHT state directory (defaults to data_dir)
+  dht_dir: null
+  
+  # Maximum cache size in bytes (512 MB default)
+  max_cache_size_bytes: 536870912
+  
+  # Maximum number of cached modules
+  max_cache_entries: 256
+
+# ========================================
+# Performance Tuning Configuration
+# ========================================
+performance:
+  # Number of worker threads (0 for auto-detect based on CPU cores)
+  worker_threads: 0
+  
+  # HTTP connection pool size per host
+  connection_pool_size: 10
+  
+  # HTTP connection pool timeout in seconds
+  pool_timeout_secs: 90
+  
+  # Enable TCP keepalive for HTTP connections
+  tcp_keepalive: true
+  
+  # WASM execution fuel limit (0 for unlimited, CPU metering)
+  wasm_fuel_limit: 100000000
+  
+  # WASM memory limit in bytes (64 MB default)
+  wasm_memory_limit_bytes: 67108864
+
+# ========================================
+# Logging Configuration
+# ========================================
+logging:
+  # Log level: trace, debug, info, warn, error
+  level: info
+  
+  # Enable JSON formatted logs (useful for log aggregation)
+  json_format: false
+  
+  # Log file path (null for stdout only)
+  file_path: null

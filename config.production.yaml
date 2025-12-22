@@ -1,0 +1,44 @@
+# Production Pied Piper Configuration
+# Optimized for production deployment with security and performance best practices
+
+network:
+  tcp_port: 4001
+  quic_port: 4002
+  enable_mdns: false  # Disable mDNS in production
+  bootstrap_peers:
+    # Add your production bootstrap peers here
+    # - 12D3KooW...@/ip4/prod-node-1.example.com/tcp/4001
+    # - 12D3KooW...@/ip4/prod-node-2.example.com/tcp/4001
+  topics:
+    - pied-piper-prod
+  max_connections: 500
+  idle_timeout_secs: 120
+
+gateway:
+  port: 8080
+  https_port: 8443
+  tls_cert_path: /etc/pied-piper/tls/cert.pem
+  tls_key_path: /etc/pied-piper/tls/key.pem
+  index_file: index.html
+  enable_compression: true
+  request_timeout_secs: 60
+
+storage:
+  data_dir: /var/lib/pied-piper
+  cache_dir: /var/cache/pied-piper/modules
+  dht_dir: /var/lib/pied-piper/dht
+  max_cache_size_bytes: 2147483648  # 2 GB
+  max_cache_entries: 1000
+
+performance:
+  worker_threads: 0  # Auto-detect
+  connection_pool_size: 20
+  pool_timeout_secs: 120
+  tcp_keepalive: true
+  wasm_fuel_limit: 500000000
+  wasm_memory_limit_bytes: 134217728  # 128 MB
+
+logging:
+  level: info
+  json_format: true  # Enable JSON logs for production log aggregation
+  file_path: /var/log/pied-piper/gateway.log
