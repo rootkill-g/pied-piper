@@ -37,3 +37,5 @@ examples/**/target/
 
 # Test scripts (optional - comment out if you want to keep these)
 test_*.sh
+
+**.log
