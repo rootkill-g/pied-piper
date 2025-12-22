@@ -2,7 +2,7 @@ use super::host::HostFunctions;
 use anyhow::{Context, Result};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::error;
 use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
 use wasmtime::*;
@@ -13,6 +13,8 @@ use wasmtime_wasi::p2::{
     pipe::{MemoryInputPipe, MemoryOutputPipe},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+use crate::metrics::Metrics;
 
 /// WASI state for the store implementing WasiView
 pub struct WasiState {
@@ -171,6 +173,7 @@ impl Default for WasmRuntimeConfig {
 pub struct WasmRuntime {
     engine: Engine,
     config: WasmRuntimeConfig,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl WasmRuntime {
@@ -199,7 +202,17 @@ impl WasmRuntime {
 
         let engine = Engine::new(&engine_config).context("Failed to create Wasmtime engine")?;
 
-        Ok(Self { engine, config })
+        Ok(Self {
+            engine,
+            config,
+            metrics: None,
+        })
+    }
+    
+    /// Set metrics for this runtime
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Create a new store with resource limits
@@ -409,6 +422,13 @@ impl WasmRuntime {
         function_name: &str,
         args: &[Val],
     ) -> Result<Vec<Val>> {
+        let start = Instant::now();
+        let initial_fuel = if self.config.enable_fuel {
+            store.get_fuel().ok()
+        } else {
+            None
+        };
+        
         // Get the function
         let func = instance
             .get_func(&mut *store, function_name)
@@ -418,7 +438,7 @@ impl WasmRuntime {
         let mut results = vec![Val::I32(0); func.ty(&*store).results().len()];
 
         // Call the function with timeout
-        self.run_with_timeout(
+        let result = self.run_with_timeout(
             async {
                 func.call_async(&mut *store, args, &mut results)
                     .await
@@ -426,8 +446,39 @@ impl WasmRuntime {
             },
             &format!("function '{}'", function_name),
         )
-        .await?;
-
+        .await;
+        
+        // Track metrics
+        if let Some(metrics) = &self.metrics {
+            let duration = start.elapsed().as_secs_f64();
+            let status = if result.is_ok() { "success" } else { "error" };
+            
+            metrics.wasm_executions_total
+                .with_label_values(&["unknown", status])
+                .inc();
+            
+            metrics.wasm_execution_duration
+                .with_label_values(&["unknown"])
+                .observe(duration);
+            
+            // Track fuel consumed
+            if let Some(initial) = initial_fuel {
+                if let Ok(remaining) = store.get_fuel() {
+                    let consumed = initial.saturating_sub(remaining);
+                    metrics.wasm_fuel_consumed.observe(consumed as f64);
+                }
+            }
+            
+            // Track memory usage
+            if let Some(memory) = instance.get_memory(&mut *store, "memory") {
+                let size = memory.data_size(&*store);
+                metrics.wasm_memory_usage
+                    .with_label_values(&["unknown"])
+                    .set(size as f64);
+            }
+        }
+        
+        result?;
         Ok(results)
     }
 

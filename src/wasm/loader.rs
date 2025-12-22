@@ -9,6 +9,8 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::metrics::Metrics;
+
 /// Content identifier for a Wasm module (using Blake3)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModuleCid(pub String);
@@ -78,8 +80,11 @@ pub struct ModuleLoader {
     /// Current memory usage in bytes
     current_bytes: Arc<RwLock<usize>>,
 
-    /// Maximum cached bytes (256 MB default)
+    /// Maximum cached bytes (512 MB default)
     max_bytes: usize,
+    
+    /// Metrics for tracking cache performance
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl ModuleLoader {
@@ -99,7 +104,14 @@ impl ModuleLoader {
             bytes_cache: Arc::new(RwLock::new(LruCache::new(max_entries))),
             current_bytes: Arc::new(RwLock::new(0)),
             max_bytes: 512 * 1024 * 1024, // 512 MB
+            metrics: None,
         })
+    }
+    
+    /// Set metrics for this loader
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Load a module from local filesystem
@@ -175,9 +187,20 @@ impl ModuleLoader {
         match (info, bytes) {
             (Some(info), Some(bytes)) => {
                 info!("Module {} found in memory cache", cid);
+                
+                // Track cache hit
+                if let Some(metrics) = &self.metrics {
+                    metrics.content_cache_hits.inc();
+                }
+                
                 Some((info, bytes))
             }
             _ => {
+                // Track cache miss
+                if let Some(metrics) = &self.metrics {
+                    metrics.content_cache_misses.inc();
+                }
+                
                 // Try loading from disk
                 info!("Module {} not in memory, trying disk...", cid);
                 match self.load_from_disk(cid).await {
@@ -269,6 +292,12 @@ impl ModuleLoader {
     pub async fn cache_stats(&self) -> (usize, usize) {
         let info_count = self.info_cache.read().await.len();
         let bytes_count = self.bytes_cache.read().await.len();
+        
+        // Update metrics
+        if let Some(metrics) = &self.metrics {
+            metrics.content_modules_cached.set(bytes_count as i64);
+        }
+        
         (info_count, bytes_count)
     }
 

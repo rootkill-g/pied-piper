@@ -161,11 +161,14 @@ impl GatewayServer {
                 self.network.clone(),
                 self.loader.clone(),
             )),
-            handler: Arc::new(RequestHandler::new(
-                self.network.clone(),
-                self.loader.clone(),
-                self.config.clone(),
-            )),
+            handler: Arc::new(
+                RequestHandler::new(
+                    self.network.clone(),
+                    self.loader.clone(),
+                    self.config.clone(),
+                )
+                .with_metrics(metrics.clone())
+            ),
             ws_handler: Arc::new(WsHandler::new(self.network.clone(), self.loader.clone())),
             metrics,
         })
@@ -174,12 +177,19 @@ impl GatewayServer {
 
 // --- Handlers ---
 
-async fn health_check() -> &'static str {
+async fn health_check(State(state): State<Arc<GatewayState>>) -> &'static str {
+    state.metrics.http_requests_total
+        .with_label_values(&["GET", "/health", "200"])
+        .inc();
     "OK"
 }
 
 async fn info_handler(State(state): State<Arc<GatewayState>>) -> Json<serde_json::Value> {
     let peer_id = state.network.local_peer_id();
+
+    state.metrics.http_requests_total
+        .with_label_values(&["GET", "/info", "200"])
+        .inc();
 
     Json(serde_json::json!({
         "gateway": "Pied Piper HTTP Gateway",

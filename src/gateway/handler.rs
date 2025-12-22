@@ -4,10 +4,12 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use super::server::GatewayConfig;
+use crate::metrics::Metrics;
 use crate::network::NetworkClient;
 use crate::wasm::{ModuleLoader, WasmRuntime, WasmRuntimeConfig};
 
@@ -16,6 +18,7 @@ pub struct RequestHandler {
     network: NetworkClient,
     loader: Arc<ModuleLoader>,
     config: GatewayConfig,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl RequestHandler {
@@ -24,7 +27,14 @@ impl RequestHandler {
             network,
             loader,
             config,
+            metrics: None,
         }
+    }
+
+    /// Set metrics for this handler
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Handle a request for a CID-based resource
@@ -37,6 +47,8 @@ impl RequestHandler {
         headers: &axum::http::HeaderMap,
         body: &axum::body::Bytes,
     ) -> Response {
+        let start = Instant::now();
+        
         debug!(
             "Handling CID request: {} path: {:?} query: {:?} method: {}",
             cid, path, query, method
@@ -46,11 +58,21 @@ impl RequestHandler {
         let bytes = match self.fetch_module(cid).await {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
+                if let Some(metrics) = &self.metrics {
+                    metrics.http_requests_total
+                        .with_label_values(&[method, path.unwrap_or("/"), "404"])
+                        .inc();
+                }
                 return self
                     .error_response(StatusCode::NOT_FOUND, &format!("Module {} not found", cid));
             }
             Err(e) => {
                 error!("Error fetching module {}: {}", cid, e);
+                if let Some(metrics) = &self.metrics {
+                    metrics.http_requests_total
+                        .with_label_values(&[method, path.unwrap_or("/"), "500"])
+                        .inc();
+                }
                 return self.error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     &format!("Error fetching module: {}", e),
@@ -77,14 +99,27 @@ impl RequestHandler {
             && (bytes[4] == 0x0d || bytes[4] == 0x01); // 0x0d=component, 0x01=core module
 
         // If it's WASM (component or core module), execute it as API
-        if is_wasm {
+        let response = if is_wasm {
             match self
                 .execute_wasm_api(cid, path, body, method, query, headers)
                 .await
             {
-                Ok(response) => response,
+                Ok(response) => {
+                    if let Some(metrics) = &self.metrics {
+                        let status = response.status().as_u16().to_string();
+                        metrics.http_requests_total
+                            .with_label_values(&[method, path, &status])
+                            .inc();
+                    }
+                    response
+                }
                 Err(e) => {
                     error!("Error executing WASM component: {}", e);
+                    if let Some(metrics) = &self.metrics {
+                        metrics.http_requests_total
+                            .with_label_values(&[method, path, "500"])
+                            .inc();
+                    }
                     self.error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         &format!("Execution error: {}", e),
@@ -93,11 +128,35 @@ impl RequestHandler {
             }
         // If path is empty or ends with .html, serve as frontend
         } else if path.is_empty() || path.ends_with(".html") || path == &self.config.index_file {
-            self.serve_frontend(&bytes, path).await
+            let response = self.serve_frontend(&bytes, path).await;
+            if let Some(metrics) = &self.metrics {
+                let status = response.status().as_u16().to_string();
+                metrics.http_requests_total
+                    .with_label_values(&[method, path, &status])
+                    .inc();
+            }
+            response
         } else {
             // Otherwise, try to serve as static asset
-            self.serve_static_file(&bytes, path).await
+            let response = self.serve_static_file(&bytes, path).await;
+            if let Some(metrics) = &self.metrics {
+                let status = response.status().as_u16().to_string();
+                metrics.http_requests_total
+                    .with_label_values(&[method, path, &status])
+                    .inc();
+            }
+            response
+        };
+        
+        // Track request duration
+        if let Some(metrics) = &self.metrics {
+            let duration = start.elapsed().as_secs_f64();
+            metrics.http_request_duration
+                .with_label_values(&[method, path])
+                .observe(duration);
         }
+        
+        response
     }
 
     /// Handle a request for a named application
