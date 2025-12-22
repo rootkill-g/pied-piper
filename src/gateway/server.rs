@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use axum::{
     Router as AxumRouter,
     extract::State,
-    routing::{get, post},
+    routing::{any, get},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -128,16 +128,12 @@ impl GatewayServer {
             
             // Application routes
             // Direct CID access: /cid/<cid>/*path
-            .route("/cid/:cid", get(handle_cid_request))
-            .route("/cid/:cid/*path", get(handle_cid_request_with_path))
+            .route("/cid/:cid", any(handle_cid_request))
+            .route("/cid/:cid/*path", any(handle_cid_request_with_path))
             
             // Named app access: /app/<name>/*path
-            .route("/app/:name", get(handle_app_request))
-            .route("/app/:name/*path", get(handle_app_request_with_path))
-            
-            // API routes (POST/PUT/DELETE)
-            .route("/cid/:cid/api/*path", post(handle_api_request))
-            .route("/app/:name/api/*path", post(handle_api_request))
+            .route("/app/:name", any(handle_app_request))
+            .route("/app/:name/*path", any(handle_app_request_with_path))
             
             // Root handler (could map to a default app)
             .route("/", get(root_handler))
@@ -171,56 +167,67 @@ async fn gateway_info(State(state): State<GatewayState>) -> String {
 }
 
 /// Handle CID-based requests (no path)
+/// Handle CID-based requests (no path)
 async fn handle_cid_request(
     State(state): State<GatewayState>,
+    method: axum::http::Method,
     axum::extract::Path(cid): axum::extract::Path<String>,
+    query: axum::extract::RawQuery,
 ) -> axum::response::Response {
-    debug!("CID request: {}", cid);
+    let query_str = query.0.as_deref();
+    // Normalize CID by removing any trailing slashes
+    let cid_normalized = cid.trim_end_matches('/');
+    debug!("CID request: {} (normalized from '{}') method: {} query: {:?}", cid_normalized, cid, method, query_str);
     
-    state.handler.handle_cid_request(&cid, None).await
+    state.handler.handle_cid_request(cid_normalized, None, method.as_str(), query_str).await
 }
 
 /// Handle CID-based requests with path
 async fn handle_cid_request_with_path(
     State(state): State<GatewayState>,
+    method: axum::http::Method,
     axum::extract::Path((cid, path)): axum::extract::Path<(String, String)>,
+    query: axum::extract::RawQuery,
 ) -> axum::response::Response {
-    debug!("CID request: {} path: {}", cid, path);
+    let query_str = query.0.as_deref();
+    // Normalize CID by removing any trailing slashes
+    let cid_normalized = cid.trim_end_matches('/');
+    debug!("CID request: {} (normalized from '{}') path: {} method: {} query: {:?}", cid_normalized, cid, path, method, query_str);
     
-    state.handler.handle_cid_request(&cid, Some(&path)).await
+    state.handler.handle_cid_request(cid_normalized, Some(&path), method.as_str(), query_str).await
 }
 
 /// Handle named application requests (no path)
 async fn handle_app_request(
     State(state): State<GatewayState>,
+    method: axum::http::Method,
     axum::extract::Path(name): axum::extract::Path<String>,
+    query: axum::extract::RawQuery,
 ) -> axum::response::Response {
-    debug!("App request: {}", name);
+    let query_str = query.0.as_deref();
+    // Normalize app name by removing any trailing slashes
+    let name_normalized = name.trim_end_matches('/');
+    debug!("App request: {} (normalized from '{}') method: {} query: {:?}", name_normalized, name, method, query_str);
     
-    state.handler.handle_app_request(&name, None).await
+    state.handler.handle_app_request(name_normalized, None, method.as_str(), query_str).await
 }
 
 /// Handle named application requests with path
 async fn handle_app_request_with_path(
     State(state): State<GatewayState>,
+    method: axum::http::Method,
     axum::extract::Path((name, path)): axum::extract::Path<(String, String)>,
+    query: axum::extract::RawQuery,
 ) -> axum::response::Response {
-    debug!("App request: {} path: {}", name, path);
+    let query_str = query.0.as_deref();
+    // Normalize app name by removing any trailing slashes
+    let name_normalized = name.trim_end_matches('/');
+    debug!("App request: {} (normalized from '{}') path: {} method: {} query: {:?}", name_normalized, name, path, method, query_str);
     
-    state.handler.handle_app_request(&name, Some(&path)).await
+    state.handler.handle_app_request(name_normalized, Some(&path), method.as_str(), query_str).await
 }
 
 /// Handle API requests (POST/PUT/DELETE)
-async fn handle_api_request(
-    State(state): State<GatewayState>,
-    axum::extract::Path((target, path)): axum::extract::Path<(String, String)>,
-    body: String,
-) -> axum::response::Response {
-    debug!("API request: {} path: {}", target, path);
-    
-    state.handler.handle_api_request(&target, &path, body).await
-}
-
 /// Root handler
 async fn root_handler() -> axum::response::Html<&'static str> {
     axum::response::Html(
