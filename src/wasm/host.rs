@@ -29,8 +29,12 @@ impl HostFunctions {
             state: Arc::new(RwLock::new(HostState {
                 log_messages: Vec::new(),
             })),
+            // reqwest Client with optimized connection pooling
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                .pool_max_idle_per_host(10) // Keep 10 idle connections per host
+                .pool_idle_timeout(std::time::Duration::from_secs(90)) // Keep alive for 90s
+                .tcp_keepalive(std::time::Duration::from_secs(60)) // TCP keepalive
                 .build()
                 .unwrap(),
             storage: Arc::new(RwLock::new(HashMap::new())),

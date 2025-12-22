@@ -8,6 +8,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tracing::{debug, info};
 
 use super::handler::RequestHandler;
@@ -90,6 +91,8 @@ impl GatewayServer {
             // Root and Fallback
             .route("/", get(root_handler))
             .fallback(not_found_handler)
+            // Add compression layer (Brotli, Gzip, Deflate)
+            .layer(CompressionLayer::new())
             // Add state
             .with_state(state);
 

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -62,27 +64,21 @@ pub struct ModuleInfo {
     pub description: Option<String>,
 }
 
-/// Module loader with caching
+/// Module loader with LRU caching
 pub struct ModuleLoader {
     /// Cache directory for downloaded modules
     cache_dir: PathBuf,
 
-    /// In-memory cache of module info
-    info_cache: Arc<RwLock<HashMap<ModuleCid, ModuleInfo>>>,
+    /// In-memory LRU cache of module info
+    info_cache: Arc<RwLock<LruCache<ModuleCid, ModuleInfo>>>,
 
-    /// In-memory cache of module bytes
-    bytes_cache: Arc<RwLock<HashMap<ModuleCid, Arc<Vec<u8>>>>>,
-
-    /// LRU order for cached module bytes (oldest at front)
-    lru_order: Arc<RwLock<VecDeque<ModuleCid>>>,
+    /// In-memory LRU cache of module bytes
+    bytes_cache: Arc<RwLock<LruCache<ModuleCid, Arc<Vec<u8>>>>>,
 
     /// Current memory usage in bytes
     current_bytes: Arc<RwLock<usize>>,
 
-    /// Maximum number of cached modules
-    max_entries: usize,
-
-    /// Maximum cached bytes
+    /// Maximum cached bytes (256 MB default)
     max_bytes: usize,
 }
 
@@ -94,14 +90,15 @@ impl ModuleLoader {
             .await
             .context("Failed to create cache directory")?;
 
+        // Max 256 entries in LRU cache
+        let max_entries = NonZeroUsize::new(256).unwrap();
+
         Ok(Self {
             cache_dir,
-            info_cache: Arc::new(RwLock::new(HashMap::new())),
-            bytes_cache: Arc::new(RwLock::new(HashMap::new())),
-            lru_order: Arc::new(RwLock::new(VecDeque::new())),
+            info_cache: Arc::new(RwLock::new(LruCache::new(max_entries))),
+            bytes_cache: Arc::new(RwLock::new(LruCache::new(max_entries))),
             current_bytes: Arc::new(RwLock::new(0)),
-            max_entries: 128,
-            max_bytes: 256 * 1024 * 1024,
+            max_bytes: 512 * 1024 * 1024, // 512 MB
         })
     }
 
@@ -164,21 +161,20 @@ impl ModuleLoader {
 
     /// Get a module from cache by CID
     pub async fn get_from_cache(&self, cid: &ModuleCid) -> Option<(ModuleInfo, Arc<Vec<u8>>)> {
-        // Check in-memory cache first
+        // Check in-memory cache first (LRU automatically updates on get)
         let info = {
-            let info_cache = self.info_cache.read().await;
+            let mut info_cache = self.info_cache.write().await;
             info_cache.get(cid).cloned()
         };
 
         let bytes = {
-            let bytes_cache = self.bytes_cache.read().await;
+            let mut bytes_cache = self.bytes_cache.write().await;
             bytes_cache.get(cid).cloned()
         };
 
         match (info, bytes) {
             (Some(info), Some(bytes)) => {
                 info!("Module {} found in memory cache", cid);
-                self.touch_lru(cid).await;
                 Some((info, bytes))
             }
             _ => {
@@ -216,7 +212,7 @@ impl ModuleLoader {
     /// Check if a module is in cache
     pub async fn is_cached(&self, cid: &ModuleCid) -> bool {
         let info_cache = self.info_cache.read().await;
-        info_cache.contains_key(cid)
+        info_cache.contains(cid)
     }
 
     /// Save a module to disk cache
@@ -264,9 +260,6 @@ impl ModuleLoader {
 
         let mut bytes_cache = self.bytes_cache.write().await;
         bytes_cache.clear();
-
-        let mut lru_order = self.lru_order.write().await;
-        lru_order.clear();
 
         let mut current_bytes = self.current_bytes.write().await;
         *current_bytes = 0;
@@ -339,7 +332,7 @@ impl ModuleLoader {
 
         // Then update cache
         let mut info_cache = self.info_cache.write().await;
-        info_cache.insert(cid.clone(), info);
+        info_cache.put(cid.clone(), info);
 
         Ok(())
     }
@@ -354,7 +347,7 @@ impl ModuleLoader {
 
             // Update cache
             let mut info_cache = self.info_cache.write().await;
-            info_cache.insert(cid.clone(), info.clone());
+            info_cache.put(cid.clone(), info.clone());
 
             Ok(Some(info))
         } else {
@@ -388,60 +381,48 @@ impl ModuleLoader {
         let mut bytes_cache = self.bytes_cache.write().await;
         let mut current_bytes = self.current_bytes.write().await;
 
-        if let Some(existing) = bytes_cache.get(&cid) {
+        if let Some(existing) = bytes_cache.peek(&cid) {
             *current_bytes = current_bytes.saturating_sub(existing.len());
         }
 
-        info_cache.insert(cid.clone(), info);
-        bytes_cache.insert(cid.clone(), bytes.clone());
+        info_cache.put(cid.clone(), info);
+        bytes_cache.put(cid.clone(), bytes.clone());
         *current_bytes = current_bytes.saturating_add(bytes.len());
 
         drop(bytes_cache);
         drop(info_cache);
         drop(current_bytes);
 
-        self.touch_lru(&cid).await;
+        // LRU cache handles ordering automatically on put/get
         self.evict_if_needed().await;
-    }
-
-    async fn touch_lru(&self, cid: &ModuleCid) {
-        let mut lru_order = self.lru_order.write().await;
-        if let Some(pos) = lru_order.iter().position(|existing| existing == cid) {
-            lru_order.remove(pos);
-        }
-        lru_order.push_back(cid.clone());
     }
 
     async fn evict_if_needed(&self) {
         loop {
-            let (entries, bytes) = {
-                let info_cache = self.info_cache.read().await;
+            let bytes = {
                 let current_bytes = self.current_bytes.read().await;
-                (info_cache.len(), *current_bytes)
+                *current_bytes
             };
 
-            if entries <= self.max_entries && bytes <= self.max_bytes {
+            if bytes <= self.max_bytes {
                 break;
             }
 
-            let oldest = {
-                let mut lru_order = self.lru_order.write().await;
-                lru_order.pop_front()
+            // Pop the least recently used entry
+            let (evicted_cid, evicted_bytes) = {
+                let mut bytes_cache = self.bytes_cache.write().await;
+                match bytes_cache.pop_lru() {
+                    Some((cid, bytes)) => (cid, bytes.len()),
+                    None => break,
+                }
             };
 
-            let oldest = match oldest {
-                Some(oldest) => oldest,
-                None => break,
-            };
-
+            // Remove from info cache and update byte count
             let mut info_cache = self.info_cache.write().await;
-            let mut bytes_cache = self.bytes_cache.write().await;
             let mut current_bytes = self.current_bytes.write().await;
-
-            if let Some(bytes) = bytes_cache.remove(&oldest) {
-                *current_bytes = current_bytes.saturating_sub(bytes.len());
-            }
-            info_cache.remove(&oldest);
+            
+            info_cache.pop(&evicted_cid);
+            *current_bytes = current_bytes.saturating_sub(evicted_bytes);
         }
     }
 }
