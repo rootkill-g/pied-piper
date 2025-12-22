@@ -1,104 +1,426 @@
 # Pied Piper - Decentralized Internet Platform
 
-A fully decentralized internet platform for running WebAssembly applications, built with Rust and libp2p.
+> A fully decentralized internet platform for running WebAssembly applications, built with Rust and libp2p.
 
-## Project Status: Phase 3 - Content Distribution 🚀
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-89%20passing-brightgreen.svg)](#testing)
 
-**Current Version:** 0.2.0
-
-### Completed Features
-
-#### Phase 1: Network Foundation ✅
-- ✅ **libp2p Network Stack**: QUIC and TCP transport with Noise encryption
-- ✅ **Peer Discovery**: mDNS for local network discovery, Kademlia DHT for global discovery
-- ✅ **Network Protocols**: 
-  - Yamux multiplexing
-  - Identify protocol for peer information exchange
-  - Ping for connection keep-alive
-  - GossipSub for pub/sub messaging
-- ✅ **CLI Tool**: Command-line interface for node management
-- ✅ **Logging**: Structured logging with tracing
-
-#### Phase 2: WebAssembly Runtime ✅
-- ✅ **Wasmtime Integration**: Latest Wasmtime 39.0.1 with async support
-- ✅ **Resource Limiting**: Memory, execution time, and CPU (fuel) limits
-- ✅ **Content Addressing**: Blake3-based CIDs for WebAssembly modules
-- ✅ **Module Caching**: In-memory and disk-based module caching
-- ✅ **Host Functions**: Logging, time, random, and cryptography functions
-- ✅ **Sandboxing**: Configurable security profiles (conservative/permissive)
-- ✅ **Async Execution**: Full Tokio async/await support
-
-#### Phase 3: Content Distribution ✅ (NEW!)
-- ✅ **Module Publishing**: Deploy WASM modules to DHT with metadata
-- ✅ **Content Discovery**: Find modules by CID or search by name
-- ✅ **Request-Response Protocol**: CBOR-based module distribution protocol
-- ✅ **Module Provider**: Serve modules to other peers
-- ✅ **Network Integration**: Deploy, search, and run commands
-- ✅ **Cache-First Fetch**: Check local cache before network requests
-- ⏳ **Peer-to-Peer Fetch**: Fetch modules from provider peers (partially implemented)
-
-#### Phase 4: HTTP Gateway ✅ (NEW!)
-- ✅ **HTTP Server**: Axum-based gateway for browser access
-- ✅ **URL Routing**: Access apps by CID (`/cid/<cid>`) or name (`/app/<name>`)
-- ✅ **Name Resolution**: Human-readable names via DHT lookups
-- ✅ **API Endpoints**: POST requests routed to WASM backend handlers
-- ✅ **WASM Execution**: Runtime with sandboxing and resource limits
-- ✅ **Error Handling**: Beautiful HTML error pages
-- ⏳ **Frontend Serving**: Asset bundling for complete apps (in progress)
-- ⏳ **Full I/O**: Request/response data passing (placeholder)
-
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Rust 1.70+ (nightly recommended)
-- Cargo
-- wasm32-unknown-unknown or wasm32-wasi target for building WASM modules
+- **Rust 1.70+** with `wasm32-wasip1` target
+- **Cargo** (comes with Rust)
+
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Add WASM target
+rustup target add wasm32-wasip1
+```
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/pied-piper
+git clone https://github.com/rootkill-g/pied-piper
 cd pied-piper
 
-# Build the project
+# Build in release mode
 cargo build --release
 
-# The binary will be in target/release/pied-piper
+# Binary location: target/release/pied-piper
 ```
 
-### Running a Node
-
-#### Start a basic node
+### Launch Your First Node
 
 ```bash
-./target/release/pied-piper daemon
+# Start a node with default settings
+./target/release/pied-piper serve
+
+# Or with custom configuration
+./target/release/pied-piper serve --gateway-port 8080 --quic-port 4001
 ```
 
-#### Deploy a WebAssembly Module (NEW!)
+The gateway will be available at **http://localhost:8080**
+
+### Deploy Your First WASM Module
 
 ```bash
-# Deploy a WASM module to the network
-./target/release/pied-piper deploy module.wasm
+# Deploy a WASM module
+./target/release/pied-piper deploy examples/hello-api/target/wasm32-wasip1/release/hello_api.wasm
 
-# Output:
+# Output example:
 # ✅ Module deployed successfully!
-# 📦 Module Name: module
-# 🔗 CID: bjmz4m6y7qxlqcktlzjk3i3dpyqxmqjqfqcrzq...
-# 🆔 Provider Peer ID: 12D3KooW...
+# 📦 Module Name: hello_api
+# 🔗 CID: bafybei...
+# 🌐 Access at: http://localhost:8080/cid/bafybei.../api/hello
 ```
 
-#### Search for Modules (NEW!)
+### Access Your Module
 
 ```bash
-# Search for modules by name
-./target/release/pied-piper search hello_world --timeout 10
+# Via HTTP gateway
+curl http://localhost:8080/cid/<YOUR_CID>/api/hello
+
+# Or in your browser
+open http://localhost:8080/cid/<YOUR_CID>
 ```
 
-#### Run a WebAssembly Module (NEW!)
+---
+
+## 📋 Project Status
+
+**Current Version:** 0.5.0  
+**Phase:** 5 (Production Readiness) - **67% Complete**
+
+### ✅ Completed Phases (1-4)
+
+<details>
+<summary><b>Phase 1: Network Foundation</b> ✅</summary>
+
+- libp2p with QUIC/TCP transport
+- Kademlia DHT for peer discovery and content routing
+- mDNS for local network discovery
+- GossipSub for pub/sub messaging
+- Circuit Relay for NAT traversal
+- ~2,500 lines of production code
+
+</details>
+
+<details>
+<summary><b>Phase 2: WebAssembly Runtime</b> ✅</summary>
+
+- Wasmtime 39.0.1 runtime engine
+- WASI Preview 1 (core modules) and Preview 2 (component model) support
+- Resource limits: memory, CPU (fuel), execution time
+- Advanced host functions: HTTP client, storage, crypto
+- Module caching (LRU, 256 entries, 512MB)
+- ~3,400 lines of production code
+
+</details>
+
+<details>
+<summary><b>Phase 3: Content Distribution</b> ✅</summary>
+
+- Content-addressed storage (Blake3-based CIDs)
+- Module publishing and discovery via DHT
+- P2P content distribution
+- Name resolution (human-readable names)
+- Asset bundling for web applications
+- ~3,000+ lines of production code
+
+</details>
+
+<details>
+<summary><b>Phase 4: Advanced Features</b> ✅</summary>
+
+- **HTTP Gateway**: Axum-based HTTP/HTTPS server with TLS
+- **WebSocket Support**: Real-time bidirectional communication
+- **Full HTTP I/O**: Complete request/response handling with binary support
+- **CRDT State Management**: LWW-Map and OR-Set with GossipSub sync
+- ~2,500+ lines of production code
+- **19 CRDT tests passing**
+
+</details>
+
+### ⏳ Phase 5: Production Readiness (67% Complete)
+
+| Sub-Phase | Status | Description |
+|-----------|--------|-------------|
+| **5.1: Metrics** | ✅ Complete | Prometheus metrics, /metrics endpoint |
+| **5.2: Performance** | ✅ Complete | LRU cache, connection pooling, compression |
+| **5.3: Reliability** | ✅ Complete | Graceful shutdown, health checks |
+| **5.4: Configuration** | ✅ Complete | YAML/TOML/JSON config, env vars, CLI commands |
+| **5.5: Security** | 🔨 Pending | Rate limiting, DDoS protection |
+| **5.6: Documentation** | ⏳ In Progress | This README, guides, API docs |
+
+**See [PROJECT_STATUS.md](PROJECT_STATUS.md) for detailed status tracking.**
+
+---
+
+## 🎯 Key Features
+
+### Decentralized Infrastructure
+- **No central servers** - fully P2P network using libp2p
+- **Content addressing** - immutable deployments via CID
+- **Peer discovery** - automatic via mDNS and Kademlia DHT
+- **NAT traversal** - Circuit Relay and DCUtR hole-punching
+
+### WebAssembly Runtime
+- **Multi-language support** - Run Rust, C, C++, AssemblyScript, and more
+- **WASI P1 & P2** - Support for both core modules and components
+- **Sandboxed execution** - Memory-safe with configurable resource limits
+- **Host functions** - HTTP client, storage, crypto, logging
+
+### HTTP Gateway
+- **Browser-compatible** - Access WASM apps via HTTP/HTTPS
+- **TLS support** - Self-signed certificates for HTTPS
+- **WebSocket** - Real-time communication
+- **Asset bundling** - Deploy complete web apps (HTML/CSS/JS + WASM)
+- **SPA support** - Client-side routing fallback
+
+### Distributed State
+- **CRDTs** - Conflict-free replicated data types
+- **Eventually consistent** - Automatic conflict resolution
+- **GossipSub sync** - Real-time state propagation
+- **LWW-Map & OR-Set** - Two CRDT implementations
+
+---
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Configuration Guide](docs/CONFIGURATION.md) | Configure your node (ports, TLS, bootstrap peers) |
+| [WASM I/O ABI](docs/WASM_IO_ABI.md) | Request/response protocol specification |
+| [WASM I/O Guide](docs/WASM_IO_GUIDE.md) | Practical examples and tutorials |
+| [Host Functions](docs/HOST_FUNCTIONS.md) | Available APIs for WASM modules |
+| [Network Discovery](docs/NETWORK_DISCOVERY.md) | Peer discovery and bootstrap configuration |
+| [Gateway Guide](docs/GATEWAY.md) | HTTP gateway usage and routing |
+| [Testing Guide](docs/TESTING.md) | How to test your modules and deployments |
+| [Project Status](PROJECT_STATUS.md) | Detailed phase-by-phase progress tracking |
+
+---
+
+## 🛠️ Usage Examples
+
+### Deploy a Backend API
 
 ```bash
+# Build your Rust WASM module
+cd my-api
+cargo build --target wasm32-wasip1 --release
+
+# Deploy to the network
+pied-piper deploy target/wasm32-wasip1/release/my_api.wasm
+
+# Access your API
+curl http://localhost:8080/cid/<CID>/api/endpoint
+```
+
+### Deploy a Full Web Application
+
+```bash
+# Bundle WASM + assets (HTML/CSS/JS)
+pied-piper deploy my_app.wasm --assets ./dist/
+
+# Access in browser
+open http://localhost:8080/cid/<CID>
+```
+
+### Search for Modules
+
+```bash
+# Search by name
+pied-piper search hello --timeout 10
+
+# List all local modules
+pied-piper list
+```
+
+### Configuration
+
+```bash
+# Generate example config
+pied-piper config init
+
+# Validate config
+pied-piper config validate config.yaml
+
+# Show current config
+pied-piper config show
+```
+
+---
+
+## 🔬 Development
+
+### Build from Source
+
+```bash
+# Development build
+cargo build
+
+# Release build
+cargo build --release
+
+# Run tests
+cargo test
+
+# Run with logs
+RUST_LOG=debug cargo run -- serve
+```
+
+### Project Structure
+
+```
+pied-piper/
+├── src/
+│   ├── main.rs              # Entry point and CLI
+│   ├── config.rs            # Configuration management
+│   ├── bundle.rs            # Asset bundling
+│   ├── network/             # P2P networking (libp2p)
+│   ├── wasm/                # WASM runtime and host functions
+│   ├── gateway/             # HTTP gateway and routing
+│   ├── content/             # Content distribution
+│   ├── crdt/                # CRDT state management
+│   └── metrics/             # Prometheus metrics
+├── examples/                # Example WASM modules
+├── tests/                   # Integration tests
+└── docs/                    # Documentation
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run all tests (89 tests)
+cargo test
+
+# Run specific test suite
+cargo test --test io_integration_test
+
+# Run with output
+cargo test -- --nocapture
+
+# Test coverage breakdown:
+# - 70 unit tests
+# - 16 integration tests  
+# - 3 I/O integration tests
+```
+
+### Example Modules
+
+The repository includes several example modules in `examples/`:
+
+- **hello-api** - Simple HTTP API
+- **joke-api** - Fetches jokes from external API
+- **dashboard** - Web dashboard with metrics
+- **web-app** - Complete SPA example
+- **ws-echo** - WebSocket echo server
+- **test-echo-api** - I/O testing module
+
+---
+
+## 🚀 Deployment
+
+### Production Configuration
+
+```yaml
+# config.production.yaml
+gateway_port: 443
+enable_https: true
+tls_cert_path: "/path/to/cert.pem"
+tls_key_path: "/path/to/key.pem"
+
+quic_port: 4001
+enable_mdns: false  # Disable for production
+
+bootstrap_peers:
+  - "/dns4/bootstrap1.piedpiper.network/tcp/4001/p2p/12D3KooW..."
+  - "/dns4/bootstrap2.piedpiper.network/tcp/4001/p2p/12D3KooW..."
+```
+
+### Run in Production
+
+```bash
+# Using config file
+pied-piper serve --config config.production.yaml
+
+# Or via environment variables
+PP_GATEWAY_PORT=443 PP_ENABLE_HTTPS=true pied-piper serve
+
+# With systemd (see docs/DEPLOYMENT.md for full example)
+sudo systemctl start pied-piper
+```
+
+---
+
+## 📊 Metrics
+
+Access Prometheus metrics at `http://localhost:8080/metrics`
+
+Key metrics:
+- **Network**: peers connected, messages sent/received, bytes transferred
+- **DHT**: records stored, query duration
+- **Gateway**: HTTP requests, response time, WebSocket connections
+- **WASM**: execution duration, cache hits/misses, host function calls
+- **CRDTs**: operations, merge count, sync messages
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Run tests (`cargo test`)
+5. Commit (`git commit -m 'feat: add amazing feature'`)
+6. Push (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## � Acknowledgments
+
+- **libp2p** - Modular P2P networking stack
+- **Wasmtime** - Fast and secure WebAssembly runtime
+- **Axum** - Ergonomic web framework
+- **Tokio** - Asynchronous runtime
+
+---
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/rootkill-g/pied-piper/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/rootkill-g/pied-piper/discussions)
+- **Documentation**: [docs/](docs/)
+
+---
+
+## 🗺️ Roadmap
+
+**Immediate (Weeks 1-2)**
+- ✅ Complete I/O implementation with binary support
+- ✅ Frontend serving enhancements (SPA, security headers)
+- ⏳ Documentation improvements (this README)
+
+**Short-term (Weeks 3-4)**
+- Security hardening (rate limiting, DDoS protection)
+- Performance benchmarking
+- Docker containerization
+
+**Long-term (Months 2-3)**
+- Public bootstrap nodes
+- Web dashboard for node management
+- Developer SDKs (Rust, JS, Go)
+- Community building
+
+See [Project.md](Project.md) for the complete vision and technical roadmap.
+
+---
+
+<div align="center">
+
+**Built with ❤️ by the Pied Piper community**
+
+[Website](https://piedpiper.network) • [Documentation](docs/) • [Examples](examples/)
+
+</div>bash
 # Run from local file
 ./target/release/pied-piper run module.wasm --function main
 
