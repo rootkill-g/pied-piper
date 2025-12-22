@@ -157,6 +157,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Package management commands (.pn format)
+    Package {
+        #[command(subcommand)]
+        action: PackageAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -187,6 +193,81 @@ pub enum ConfigAction {
         /// Show as JSON
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PackageAction {
+    /// Initialize a new package (create pn.toml template)
+    Init {
+        /// Directory to create pn.toml in
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+
+        /// Package name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Package type: backend, frontend, fullstack, library
+        #[arg(short = 't', long, default_value = "backend")]
+        package_type: String,
+
+        /// Overwrite existing pn.toml
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Build a .pn package from pn.toml
+    Build {
+        /// Path to pn.toml manifest file
+        #[arg(short, long, default_value = "pn.toml")]
+        manifest: PathBuf,
+
+        /// Output .pn file path (defaults to <name>-<version>.pn)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Encryption key (defaults to node's peer ID derived key)
+        #[arg(short, long)]
+        key: Option<String>,
+    },
+
+    /// Deploy a .pn package to the network
+    Deploy {
+        /// Path to .pn package file
+        package: PathBuf,
+
+        /// Override package name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+
+    /// Validate a .pn package
+    Verify {
+        /// Path to .pn package file
+        package: PathBuf,
+
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Extract .pn package contents (requires decryption key)
+    Extract {
+        /// Path to .pn package file
+        package: PathBuf,
+
+        /// Output directory
+        #[arg(short, long, default_value = "./extracted")]
+        output: PathBuf,
+
+        /// Decryption key (defaults to node's peer ID derived key)
+        #[arg(short, long)]
+        key: Option<String>,
     },
 }
 

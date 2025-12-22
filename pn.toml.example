@@ -1,0 +1,20 @@
+# PiperNet Package Manifest (pn.toml)
+# NOTE: Root-level fields (type, entrypoint, assets) must come BEFORE table sections like [metadata]
+
+type = "backend"
+entrypoint = "target/wasm32-wasip1/release/my_app.wasm"
+
+[metadata]
+name = "my-awesome-app"
+version = "1.0.0"
+description = "A brief description of what this package does"
+author = "Your Name <your.email@example.com>"
+license = "MIT"
+homepage = "https://example.com/my-awesome-app"
+repository = "https://github.com/username/my-awesome-app"
+
+[dependencies]
+# package-name = "version-requirement"
+# Examples:
+# auth-lib = "^1.0"
+# database-connector = "0.5.2"

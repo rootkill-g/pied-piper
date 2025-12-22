@@ -3467,6 +3467,7 @@ dependencies = [
 name = "pied-piper"
 version = "0.5.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
@@ -3495,6 +3496,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tar",
  "tempfile",
  "thiserror 2.0.17",
@@ -3509,6 +3511,7 @@ dependencies = [
  "urlencoding",
  "wasmtime",
  "wasmtime-wasi",
+ "zstd",
 ]
 
 [[package]]

@@ -117,6 +117,58 @@ open http://localhost:8080/cid/<YOUR_CID>
 
 ---
 
+## 📦 PiperNet Package Format (.pn)
+
+**NEW**: Pied Piper now supports encrypted package deployment with the `.pn` format!
+
+### Why .pn Packages?
+
+- **🔒 Encrypted**: AES-256-GCM encryption per-node (operators can't read your code)
+- **📦 Bundled**: WASM + assets + metadata in one file
+- **✅ Verified**: Cryptographic integrity checks
+- **📝 Manifest**: Cargo-like `pn.toml` for metadata and dependencies
+- **⚡ Compressed**: Zstd compression reduces file size
+
+### Quick Example
+
+```bash
+# 1. Initialize package manifest
+pied-piper package init --name my-app
+
+# 2. Edit pn.toml (similar to Cargo.toml)
+# Set name, version, description, entrypoint, etc.
+
+# 3. Build your WASM module
+cargo build --target wasm32-wasip1 --release
+
+# 4. Create encrypted .pn package
+pied-piper package build
+
+# 5. Deploy to network (coming soon)
+pied-piper package deploy my-app-1.0.0.pn
+```
+
+### pn.toml Example
+
+```toml
+[metadata]
+name = "hello-api"
+version = "1.0.0"
+description = "A simple Hello World API"
+author = "You <you@example.com>"
+
+type = "backend"  # backend, frontend, fullstack, or library
+entrypoint = "target/wasm32-wasip1/release/hello_api.wasm"
+assets = []  # Frontend files for fullstack apps
+
+[dependencies]
+# auth-lib = "^1.0"
+```
+
+**See [docs/PN_FORMAT.md](docs/PN_FORMAT.md) for complete specification and [PACKAGE_STATUS.md](PACKAGE_STATUS.md) for implementation status.**
+
+---
+
 ## 🎯 Key Features
 
 ### Decentralized Infrastructure

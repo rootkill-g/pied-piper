@@ -1,0 +1,12 @@
+[metadata]
+name = "hello-api"
+version = "1.0.0"
+description = "A simple Hello World API"
+author = "Harsh Moroliya <harsh@email.fake>"
+license = "MIT"
+
+type = "backend"
+entrypoint = "target/wasm32-wasip1/release/hello-api.wasm"
+assets = []
+
+[dependencies]

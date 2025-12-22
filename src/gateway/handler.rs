@@ -40,6 +40,32 @@ impl RequestHandler {
         self
     }
 
+    /// Detect if bytes are a .pn package and decrypt if so
+    /// Returns (wasm_bytes, is_package)
+    async fn maybe_decrypt_package(&self, bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
+        // Check for .pn magic bytes: "PN\x01\x00"
+        if bytes.len() >= 4 && &bytes[0..4] == b"PN\x01\x00" {
+            info!("Detected .pn package format, decrypting...");
+            
+            // Use network-wide shared key for decryption
+            let decryption_key = crate::package::crypto::get_network_key();
+            
+            // Decrypt the package
+            let package = crate::package::PiperNetPackage::from_bytes(bytes, &decryption_key)
+                .context("Failed to decrypt .pn package")?;
+            
+            // Extract the WASM module
+            let wasm_bytes = package.get_module(&decryption_key)
+                .context("Failed to extract WASM module from package")?;
+            
+            info!("Successfully decrypted .pn package, extracted {} bytes WASM", wasm_bytes.len());
+            Ok((wasm_bytes, true))
+        } else {
+            // Not a .pn package, return as-is
+            Ok((bytes.to_vec(), false))
+        }
+    }
+
     /// Handle a request for a CID-based resource
     pub async fn handle_cid_request(
         &self,
@@ -82,6 +108,37 @@ impl RequestHandler {
                 );
             }
         };
+
+        // Check if it's a .pn package and decrypt if needed
+        let (bytes, is_package) = match self.maybe_decrypt_package(&bytes).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Failed to decrypt .pn package: {}", e);
+                if let Some(metrics) = &self.metrics {
+                    metrics.http_requests_total
+                        .with_label_values(&[method, path.unwrap_or("/"), "500"])
+                        .inc();
+                }
+                return self.error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to decrypt package: {}", e),
+                );
+            }
+        };
+
+        // If we decrypted a package, update the cache with the decrypted WASM bytes
+        if is_package {
+            use crate::wasm::ModuleCid;
+            let module_cid = ModuleCid::new(cid.to_string());
+            
+            // Get the cached module info
+            if let Some((info, _)) = self.loader.get_from_cache(&module_cid).await {
+                // Update cache with decrypted WASM bytes
+                let bytes_arc = Arc::new(bytes.clone());
+                self.loader.add_to_cache(&module_cid, info, bytes_arc).await;
+                debug!("Updated cache for {} with decrypted WASM bytes", cid);
+            }
+        }
 
         // Determine request type
         // Treat empty string path same as None (normalize trailing slash)

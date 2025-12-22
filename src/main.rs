@@ -7,6 +7,7 @@ mod gateway;
 mod manifest;
 mod metrics;
 mod network;
+mod package;
 mod security;
 mod storage;
 mod wasm;
@@ -21,7 +22,7 @@ use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::cli::{Cli, Commands, ConfigAction};
+use crate::cli::{Cli, Commands, ConfigAction, PackageAction};
 use crate::config::PiedPiperConfig;
 use crate::gateway::{GatewayConfig, GatewayServer};
 use crate::network::{NetworkNode, NetworkNodeConfig};
@@ -43,6 +44,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Config { action } => {
             handle_config_command(action, cli.config.as_deref())?;
+        }
+
+        Commands::Package { action } => {
+            handle_package_command(action).await?;
         }
 
         Commands::Daemon {
@@ -550,6 +555,284 @@ fn handle_config_command(action: ConfigAction, _config_path: Option<&std::path::
                 println!("{}", serde_json::to_string_pretty(&config)?);
             } else {
                 println!("{}", serde_yaml::to_string(&config)?);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_package_command(action: PackageAction) -> Result<()> {
+    use crate::package::{PackageManifest, PiperNetPackage};
+    use crate::package::builder::PackageBuilder;
+    use crate::package::crypto;
+    use crate::network::NetworkNode;
+
+    match action {
+        PackageAction::Init { directory, name, package_type, force } => {
+            let manifest_path = directory.join("pn.toml");
+            
+            if manifest_path.exists() && !force {
+                anyhow::bail!(
+                    "Manifest file '{}' already exists. Use --force to overwrite.",
+                    manifest_path.display()
+                );
+            }
+
+            // Start with example template
+            let mut manifest_content = PackageManifest::example();
+            
+            // Customize with provided options via string replacement
+            if let Some(name) = name {
+                manifest_content = manifest_content.replace(
+                    r#"name = "my-awesome-app""#,
+                    &format!(r#"name = "{}""#, name)
+                );
+            }
+            
+            manifest_content = manifest_content.replace(
+                r#"type = "backend""#,
+                &format!(r#"type = "{}""#, package_type.to_lowercase())
+            );
+
+            std::fs::write(&manifest_path, manifest_content)
+                .with_context(|| format!("Failed to write manifest to {}", manifest_path.display()))?;
+
+            info!("✅ Created package manifest: {}", manifest_path.display());
+            println!("📦 Package manifest created: {}", manifest_path.display());
+            println!("\nNext steps:");
+            println!("  1. Edit pn.toml to customize your package");
+            println!("  2. Build your WASM module: cargo build --target wasm32-wasip1 --release");
+            println!("  3. Build package: pied-piper package build");
+            println!("  4. Deploy: pied-piper package deploy <package-name>.pn");
+        }
+
+        PackageAction::Build { manifest, output, key } => {
+            if !manifest.exists() {
+                anyhow::bail!("Manifest file not found: {}", manifest.display());
+            }
+
+            info!("📦 Building package from {}", manifest.display());
+            
+            // Load manifest to get name and version for default output path
+            let manifest_content = std::fs::read_to_string(&manifest)
+                .with_context(|| format!("Failed to read manifest: {}", manifest.display()))?;
+            let pkg_manifest = PackageManifest::from_toml(&manifest_content)?;
+            
+            let output_path = output.unwrap_or_else(|| {
+                let filename = format!("{}-{}.pn", pkg_manifest.metadata.name, pkg_manifest.metadata.version);
+                PathBuf::from(filename)
+            });
+
+            // Check if key was provided (before moving it)
+            let key_provided = key.is_some();
+            
+            // Determine encryption key
+            let encryption_key = if let Some(key_str) = key {
+                // Use provided key (hex encoded)
+                let key_bytes = hex::decode(&key_str)
+                    .context("Invalid hex-encoded key")?;
+                if key_bytes.len() != 32 {
+                    anyhow::bail!("Encryption key must be 32 bytes (64 hex characters)");
+                }
+                let mut key_array = [0u8; 32];
+                key_array.copy_from_slice(&key_bytes);
+                key_array
+            } else {
+                // Use network-wide shared key (default for distribution)
+                crypto::get_network_key()
+            };
+
+            // Build the package
+            let mut builder = PackageBuilder::from_manifest_file(&manifest).await?;
+            builder.load_module().await?;
+            builder.load_assets().await?;
+            builder.load_dependencies().await?;
+            
+            let package = builder.build(&encryption_key)?;
+            package.save_to_file(&output_path, &encryption_key).await?;
+
+            info!("✅ Package built successfully: {}", output_path.display());
+            println!("✅ Package built: {}", output_path.display());
+            println!("📦 Name: {} v{}", pkg_manifest.metadata.name, pkg_manifest.metadata.version);
+            println!("🔒 Encrypted with {}", if key_provided { "provided key" } else { "network shared key" });
+            println!("\nDeploy with: pied-piper package deploy {}", output_path.display());
+        }
+
+        PackageAction::Deploy { package, name, timeout } => {
+            if !package.exists() {
+                anyhow::bail!("Package file not found: {}", package.display());
+            }
+
+            info!("🚀 Deploying package: {}", package.display());
+            
+            // Read the package file
+            let package_bytes = tokio::fs::read(&package).await
+                .with_context(|| format!("Failed to read package: {}", package.display()))?;
+            
+            // Verify it's a valid .pn package
+            if package_bytes.len() < 4 || &package_bytes[0..4] != b"PN\x01\x00" {
+                anyhow::bail!("Invalid package format. File must be a .pn package.");
+            }
+            
+            // Decrypt package to read manifest using network key
+            let decryption_key = crypto::get_network_key();
+            
+            let pkg = PiperNetPackage::load_from_file(&package, &decryption_key).await
+                .context("Failed to decrypt package")?;
+            
+            let pkg_name = name.unwrap_or_else(|| pkg.manifest.metadata.name.clone());
+            let pkg_version = pkg.manifest.metadata.version.clone();
+            let pkg_description = pkg.manifest.metadata.description.clone();
+            
+            println!("📦 Package: {} v{}", pkg_name, pkg_version);
+            if let Some(desc) = &pkg_description {
+                println!("📝 Description: {}", desc);
+            }
+            
+            // Create network node for deployment
+            let config = crate::network::NetworkNodeConfig::default();
+            let (client, mut node) = NetworkNode::new(config).await?;
+            
+            // Start the node
+            node.start_listening()?;
+            node.bootstrap_dht()?;
+            
+            // Spawn network node in background
+            tokio::spawn(async move {
+                if let Err(e) = node.run().await {
+                    error!("Network node error: {}", e);
+                }
+            });
+            
+            // Wait a bit for DHT bootstrap
+            info!("Waiting for DHT bootstrap...");
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            
+            // Deploy the .pn package
+            info!("Publishing package to network...");
+            let cid = client
+                .publish_module(
+                    package_bytes,
+                    Some(pkg_name.clone()),
+                    Some(pkg_version.clone()),
+                    pkg.manifest.metadata.author.clone(),
+                    pkg_description.clone(),
+                )
+                .await
+                .context("Failed to publish package")?;
+            
+            println!("✅ Package deployed successfully!");
+            println!("🔗 CID: {}", cid);
+            println!("🌐 Access at:");
+            println!("   By name: http://localhost:8080/app/{}", pkg_name);
+            println!("   By CID:  http://localhost:8080/cid/{}", cid);
+            
+            info!("Deployment complete. Keeping node running for {} seconds...", timeout);
+            tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
+        }
+
+        PackageAction::Verify { package, verbose } => {
+            if !package.exists() {
+                anyhow::bail!("Package file not found: {}", package.display());
+            }
+
+            info!("🔍 Verifying package: {}", package.display());
+            
+            let package_bytes = tokio::fs::read(&package).await
+                .with_context(|| format!("Failed to read package: {}", package.display()))?;
+            
+            // Check magic bytes
+            if package_bytes.len() < 4 {
+                anyhow::bail!("Invalid package: file too small");
+            }
+            
+            if &package_bytes[0..4] != b"PN\x01\x00" {
+                anyhow::bail!("Invalid package: incorrect magic bytes");
+            }
+
+            println!("✅ Valid .pn package format");
+            println!("📦 File: {}", package.display());
+            println!("📊 Size: {} bytes", package_bytes.len());
+            
+            if verbose {
+                println!("\nNote: Decryption requires the node's peer ID key");
+                println!("Use 'pied-piper package extract' to view contents");
+            }
+        }
+
+        PackageAction::Extract { package, output, key } => {
+            if !package.exists() {
+                anyhow::bail!("Package file not found: {}", package.display());
+            }
+
+            info!("📦 Extracting package: {}", package.display());
+            
+            // Determine decryption key
+            let decryption_key = if let Some(key_str) = key {
+                let key_bytes = hex::decode(&key_str)
+                    .context("Invalid hex-encoded key")?;
+                if key_bytes.len() != 32 {
+                    anyhow::bail!("Decryption key must be 32 bytes (64 hex characters)");
+                }
+                let mut key_array = [0u8; 32];
+                key_array.copy_from_slice(&key_bytes);
+                key_array
+            } else {
+                // Use network-wide shared key (default)
+                crypto::get_network_key()
+            };
+
+            // Load and decrypt package
+            let pkg = PiperNetPackage::load_from_file(&package, &decryption_key).await?;
+
+            // Create output directory
+            tokio::fs::create_dir_all(&output).await
+                .with_context(|| format!("Failed to create output directory: {}", output.display()))?;
+
+            // Extract manifest
+            let manifest_path = output.join("pn.toml");
+            let manifest_content = pkg.manifest.to_toml()?;
+            tokio::fs::write(&manifest_path, manifest_content).await?;
+
+            // Extract module
+            let module_bytes = pkg.get_module(&decryption_key)?;
+            let module_path = output.join("module.wasm");
+            tokio::fs::write(&module_path, module_bytes).await?;
+
+            // Extract assets
+            for (asset_path, _encrypted_asset) in &pkg.assets {
+                if let Some(asset_bytes) = pkg.get_asset(asset_path, &decryption_key)? {
+                    let asset_output_path = output.join(asset_path);
+                    
+                    // Create parent directories if needed
+                    if let Some(parent) = asset_output_path.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    
+                    tokio::fs::write(&asset_output_path, asset_bytes).await?;
+                }
+            }
+
+            // Extract dependencies
+            for (dep_name, _encrypted_dep) in &pkg.dependencies {
+                if let Some(dep_bytes) = pkg.get_dependency(dep_name, &decryption_key)? {
+                    let dep_path = output.join("dependencies").join(format!("{}.wasm", dep_name));
+                    
+                    tokio::fs::create_dir_all(output.join("dependencies")).await?;
+                    tokio::fs::write(&dep_path, dep_bytes).await?;
+                }
+            }
+
+            info!("✅ Package extracted to: {}", output.display());
+            println!("✅ Package extracted to: {}", output.display());
+            println!("📄 Manifest: {}", manifest_path.display());
+            println!("📦 Module: {}", module_path.display());
+            if !pkg.assets.is_empty() {
+                println!("🎨 Assets: {} files", pkg.assets.len());
+            }
+            if !pkg.dependencies.is_empty() {
+                println!("📚 Dependencies: {}", pkg.dependencies.len());
             }
         }
     }

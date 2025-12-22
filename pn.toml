@@ -1,0 +1,30 @@
+# PiperNet Package Manifest (pn.toml)
+# Similar to Cargo.toml for Rust projects
+
+[metadata]
+name = "hello-api"
+version = "1.0.0"
+description = "A simple Hello World API"
+author = "rootkill-g <rootkill.dedsec@gmail.com>"
+license = "MIT"
+homepage = "https://example.com/hello-api"
+repository = "https://github.com/user/hello-api"
+
+# Package type: backend, frontend, fullstack, or library
+type = "backend"
+
+# Main WASM module to execute
+entrypoint = "target/wasm32-wasip1/release/hello-api.wasm"
+
+# Frontend assets (for fullstack apps)
+assets = [
+    "static/index.html",
+    "static/style.css",
+    "static/app.js",
+]
+
+# Dependencies (other PiperNet packages)
+[dependencies]
+# package-name = "version-requirement"
+# auth-lib = "^1.0"
+# database = "0.5.2"
