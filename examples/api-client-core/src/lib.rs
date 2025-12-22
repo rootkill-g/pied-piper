@@ -214,7 +214,7 @@ fn handle_external() -> Response {
     
     // Fetch from external API
     log("Cache miss, fetching from API");
-    let (status, body) = http_get("https://api.github.com/zen");
+    let (status, body) = http_get("https://meowfacts.herokuapp.com/");
     
     if status == 200 {
         let data = String::from_utf8_lossy(&body).to_string();
