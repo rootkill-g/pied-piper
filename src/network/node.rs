@@ -20,6 +20,19 @@ use crate::content::{ModuleDiscovery, ModuleProvider, ModulePublisher};
 use crate::wasm::loader::{ModuleCid, ModuleInfo, ModuleLoader};
 use std::sync::Arc;
 
+/// Custom error type to signal shutdown
+#[derive(Debug)]
+struct ShutdownSignal;
+
+impl std::fmt::Display for ShutdownSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Shutdown signal received")
+    }
+}
+
+impl std::error::Error for ShutdownSignal {}
+
+
 /// Configuration for the network node
 #[derive(Debug, Clone)]
 pub struct NetworkNodeConfig {
@@ -223,6 +236,31 @@ impl NetworkClient {
 
         rx.await
             .context("Failed to receive FindBestVersion response")?
+    }
+    
+    /// Get the number of connected peers
+    pub async fn peer_count(&self) -> usize {
+        let (tx, rx) = oneshot::channel();
+
+        // Send command and handle potential errors gracefully
+        if let Err(_) = self.command_tx
+            .send(NetworkCommand::GetPeerCount { response: tx })
+            .await
+        {
+            return 0; // Return 0 if command channel is closed
+        }
+
+        rx.await.unwrap_or(0) // Return 0 if response fails
+    }
+    
+    /// Shutdown the network node gracefully
+    pub async fn shutdown(&self) -> Result<()> {
+        info!("Sending shutdown signal to network node");
+        self.command_tx
+            .send(NetworkCommand::Shutdown)
+            .await
+            .context("Failed to send Shutdown command")?;
+        Ok(())
     }
 }
 
@@ -498,6 +536,11 @@ impl NetworkNode {
                 // Handle commands from client
                 Some(command) = self.command_rx.recv() => {
                     if let Err(e) = self.handle_command(command).await {
+                        // If shutdown command, break the loop and return Ok
+                        if matches!(e.downcast_ref::<ShutdownSignal>(), Some(_)) {
+                            info!("Network node shutting down gracefully");
+                            return Ok(());
+                        }
                         warn!("Error handling command: {}", e);
                     }
                 }
@@ -875,6 +918,16 @@ impl NetworkNode {
 
             NetworkCommand::GetPeerId { response } => {
                 let _ = response.send(*self.swarm.local_peer_id());
+            }
+            
+            NetworkCommand::GetPeerCount { response } => {
+                let peer_count = self.swarm.connected_peers().count();
+                let _ = response.send(peer_count);
+            }
+            
+            NetworkCommand::Shutdown => {
+                info!("Received shutdown command");
+                return Err(anyhow::Error::new(ShutdownSignal));
             }
         }
         Ok(())

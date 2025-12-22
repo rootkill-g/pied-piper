@@ -77,6 +77,7 @@ impl GatewayServer {
 
         let app = Router::new()
             .route("/health", get(health_check))
+            .route("/ready", get(readiness_check))
             .route("/info", get(info_handler))
             .route("/metrics", get(metrics_handler))
             // WebSocket endpoints
@@ -182,6 +183,35 @@ async fn health_check(State(state): State<Arc<GatewayState>>) -> &'static str {
         .with_label_values(&["GET", "/health", "200"])
         .inc();
     "OK"
+}
+
+async fn readiness_check(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    // Check if the node has at least one peer connection
+    let peer_count = state.network.peer_count().await;
+    
+    state.metrics.http_requests_total
+        .with_label_values(&["GET", "/ready", if peer_count > 0 { "200" } else { "503" }])
+        .inc();
+    
+    if peer_count > 0 {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ready": true,
+                "peer_count": peer_count,
+                "message": "Gateway is ready to accept traffic"
+            }))
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "ready": false,
+                "peer_count": 0,
+                "message": "Gateway is not ready - no peer connections"
+            }))
+        )
+    }
 }
 
 async fn info_handler(State(state): State<Arc<GatewayState>>) -> Json<serde_json::Value> {

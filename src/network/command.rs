@@ -61,4 +61,10 @@ pub enum NetworkCommand {
 
     /// Get local peer ID
     GetPeerId { response: oneshot::Sender<PeerId> },
+    
+    /// Get the number of connected peers
+    GetPeerCount { response: oneshot::Sender<usize> },
+    
+    /// Shutdown the network node gracefully
+    Shutdown,
 }

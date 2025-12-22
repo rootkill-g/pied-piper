@@ -319,7 +319,11 @@ async fn main() -> Result<()> {
             let _ = node.start_listening()?;
             let _ = node.bootstrap_dht()?;
 
-            tokio::spawn(async move {
+            // Clone client for shutdown
+            let shutdown_client = client.clone();
+
+            // Spawn network node in background with graceful shutdown support
+            let network_handle = tokio::spawn(async move {
                 if let Err(e) = node.run().await {
                     error!("P2P node error: {}", e);
                 }
@@ -336,7 +340,37 @@ async fn main() -> Result<()> {
             };
 
             let server = GatewayServer::new(gateway_config, client, loader);
-            server.start().await?;
+            
+            // Set up graceful shutdown
+            let shutdown_signal = async {
+                signal::ctrl_c()
+                    .await
+                    .expect("Failed to install CTRL+C signal handler");
+                info!("Received shutdown signal, gracefully shutting down...");
+            };
+            
+            // Start server with shutdown signal
+            tokio::select! {
+                result = server.start() => {
+                    if let Err(e) = result {
+                        error!("Gateway server error: {}", e);
+                    }
+                }
+                _ = shutdown_signal => {
+                    info!("Shutdown signal received, stopping server...");
+                }
+            }
+            
+            // Signal network node to shut down
+            info!("Shutting down network node...");
+            if let Err(e) = shutdown_client.shutdown().await {
+                warn!("Error shutting down network node: {}", e);
+            }
+            
+            // Wait for network node to finish
+            info!("Waiting for network node to complete...");
+            let _ = network_handle.await;
+            info!("Shutdown complete");
         }
     }
 
