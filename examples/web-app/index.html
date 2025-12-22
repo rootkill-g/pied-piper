@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pied Piper Demo App</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Pied Piper Decentralized App</h1>
+            <p class="subtitle">Running on the decentralized P2P network</p>
+        </header>
+        
+        <main>
+            <div class="card">
+                <h2>Welcome!</h2>
+                <p>This web application is served directly from the Pied Piper network.</p>
+                <p>All assets (HTML, CSS, JS) are bundled and distributed via content-addressed storage.</p>
+            </div>
+            
+            <div class="card">
+                <h3>Features:</h3>
+                <ul>
+                    <li>✅ Content-addressed distribution</li>
+                    <li>✅ P2P network delivery</li>
+                    <li>✅ Static asset bundling</li>
+                    <li>✅ Immutable deployments</li>
+                    <li>✅ Browser-based access</li>
+                </ul>
+            </div>
+            
+            <div class="card">
+                <h3>Network Info:</h3>
+                <div id="info">
+                    <p><strong>Status:</strong> <span class="status-online">Online</span></p>
+                    <p><strong>Content ID:</strong> <span id="cid">Loading...</span></p>
+                    <p><strong>Protocol:</strong> HTTP Gateway over libp2p</p>
+                </div>
+            </div>
+            
+            <div class="card">
+                <button onclick="fetchData()">Test API Call</button>
+                <div id="result"></div>
+            </div>
+        </main>
+        
+        <footer>
+            <p>Powered by Pied Piper - Decentralized Internet Platform</p>
+        </footer>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
