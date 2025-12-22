@@ -578,7 +578,7 @@ impl RequestHandler {
         // Detect if this is a component (WASI P2) or core module (WASI P1)
         // Components have magic bytes: 0x00 0x61 0x73 0x6d 0x0d 0x00 0x01 0x00
         // Core modules have:          0x00 0x61 0x73 0x6d 0x01 0x00 0x00 0x00
-        let is_component = bytes.len() >= 8 
+        let is_component = bytes.len() >= 8
             && bytes[0..4] == [0x00, 0x61, 0x73, 0x6d] // "\0asm"
             && bytes[4] == 0x0d; // Component version marker
 

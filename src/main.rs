@@ -4,6 +4,7 @@ mod content;
 mod crdt;
 mod gateway;
 mod manifest;
+mod metrics;
 mod network;
 mod wasm;
 

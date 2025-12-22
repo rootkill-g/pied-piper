@@ -20,6 +20,7 @@ hyper-util = { version = "0.1.10", features = ["tokio"] }
 libp2p = { version = "0.56.0", features = ["tokio", "tcp", "quic", "noise", "yamux", "gossipsub", "kad", "mdns", "identify", "macros", "ping", "request-response", "cbor", "json", "relay", "dcutr"] }
 multibase = "0.9.2"
 multihash = "0.19.3"
+prometheus = "0.13.4"
 rand = "0.9.2"
 reqwest = { version = "0.12", features = ["json"] }
 rustls = "0.23.19"

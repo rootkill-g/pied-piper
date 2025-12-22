@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{Path, State, ws::WebSocketUpgrade},
+    http::StatusCode,
+    response::IntoResponse,
     routing::{any, get},
 };
 use std::net::SocketAddr;
@@ -12,6 +14,7 @@ use super::handler::RequestHandler;
 use super::resolver::ContentResolver;
 use super::tls::TlsConfig;
 use super::websocket::WsHandler;
+use crate::metrics::Metrics;
 use crate::network::NetworkClient;
 use crate::wasm::ModuleLoader;
 
@@ -47,6 +50,7 @@ struct GatewayState {
     resolver: Arc<ContentResolver>,
     handler: Arc<RequestHandler>,
     ws_handler: Arc<WsHandler>,
+    metrics: Arc<Metrics>,
 }
 
 /// HTTP Gateway Server
@@ -73,6 +77,7 @@ impl GatewayServer {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/info", get(info_handler))
+            .route("/metrics", get(metrics_handler))
             // WebSocket endpoints
             .route("/ws/cid/:cid", get(handle_ws_cid))
             .route("/ws/app/:name", get(handle_ws_app))
@@ -143,6 +148,8 @@ impl GatewayServer {
 
     /// Create shared state for handlers
     fn create_state(&self) -> Arc<GatewayState> {
+        let metrics = Arc::new(Metrics::new().expect("Failed to create metrics"));
+        
         Arc::new(GatewayState {
             network: self.network.clone(),
             loader: self.loader.clone(),
@@ -157,6 +164,7 @@ impl GatewayServer {
                 self.config.clone(),
             )),
             ws_handler: Arc::new(WsHandler::new(self.network.clone(), self.loader.clone())),
+            metrics,
         })
     }
 }
@@ -176,6 +184,15 @@ async fn info_handler(State(state): State<Arc<GatewayState>>) -> Json<serde_json
         "peer_id": peer_id.to_string(),
         "status": "online"
     }))
+}
+
+async fn metrics_handler(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let metrics_text = state.metrics.export();
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics_text,
+    )
 }
 
 async fn handle_cid_request(
