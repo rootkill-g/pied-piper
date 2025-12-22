@@ -2,58 +2,93 @@ use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wasmtime::*;
+use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView, WasiCtxView};
+use wasmtime_wasi::p2::{self, pipe::{MemoryInputPipe, MemoryOutputPipe}, bindings::Command};
 
-/// WASI state for the store with I/O buffers
+/// WASI state for the store implementing WasiView
 pub struct WasiState {
-    /// Input buffer (stdin)
-    pub stdin_buffer: Arc<Mutex<Vec<u8>>>,
+    /// WASI context
+    wasi_ctx: WasiCtx,
     
-    /// Output buffer (stdout)
+    /// Resource table for component model
+    resource_table: ResourceTable,
+    
+    /// Output buffer (stdout) - for capturing output
     pub stdout_buffer: Arc<Mutex<Vec<u8>>>,
     
-    /// Error buffer (stderr)
+    /// Error buffer (stderr) - for capturing output
     pub stderr_buffer: Arc<Mutex<Vec<u8>>>,
+    
+    /// Stdout pipe for reading output
+    pub stdout_pipe: Arc<MemoryOutputPipe>,
+    
+    /// Stderr pipe for reading output
+    pub stderr_pipe: Arc<MemoryOutputPipe>,
 }
 
 impl WasiState {
     /// Create a new WASI state with custom stdin data
     pub fn with_stdin(stdin_data: Vec<u8>) -> Self {
+        let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+        
+        let stdout_pipe = Arc::new(MemoryOutputPipe::new(4096));
+        let stderr_pipe = Arc::new(MemoryOutputPipe::new(4096));
+        let stdin_pipe = MemoryInputPipe::new(stdin_data);
+        
+        let wasi_ctx = WasiCtxBuilder::new()
+            .stdin(stdin_pipe)
+            .stdout(stdout_pipe.clone())
+            .stderr(stderr_pipe.clone())
+            .build();
+        
         Self {
-            stdin_buffer: Arc::new(Mutex::new(stdin_data)),
-            stdout_buffer: Arc::new(Mutex::new(Vec::new())),
-            stderr_buffer: Arc::new(Mutex::new(Vec::new())),
+            wasi_ctx,
+            resource_table: ResourceTable::new(),
+            stdout_buffer,
+            stderr_buffer,
+            stdout_pipe,
+            stderr_pipe,
         }
     }
     
     /// Create a new WASI state with empty buffers
     pub fn new() -> Self {
-        Self {
-            stdin_buffer: Arc::new(Mutex::new(Vec::new())),
-            stdout_buffer: Arc::new(Mutex::new(Vec::new())),
-            stderr_buffer: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self::with_stdin(Vec::new())
     }
     
     /// Get stdout contents
     pub fn get_stdout(&self) -> Vec<u8> {
-        self.stdout_buffer.lock().unwrap().clone()
+        // Try to get contents from the pipe
+        self.stdout_pipe.contents().to_vec()
     }
     
     /// Get stderr contents
     pub fn get_stderr(&self) -> Vec<u8> {
-        self.stderr_buffer.lock().unwrap().clone()
+        // Try to get contents from the pipe
+        self.stderr_pipe.contents().to_vec()
     }
     
     /// Clear output buffers
     pub fn clear_output(&self) {
         self.stdout_buffer.lock().unwrap().clear();
-        self.stderr_buffer.lock().unwrap().clear();
+        self.stderr_buffer.lock().unwrap().clear()
     }
 }
 
 impl Default for WasiState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl WasiView for WasiState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi_ctx,
+            table: &mut self.resource_table,
+        }
     }
 }
 
@@ -190,17 +225,23 @@ impl WasmRuntime {
             .context("Failed to load Wasm module")
     }
     
-    /// Instantiate a module with WASI
+    /// Load a Wasm component from bytes (WASI Preview 2)
+    pub fn load_component(&self, wasm_bytes: &[u8]) -> Result<Component> {
+        Component::new(&self.engine, wasm_bytes)
+            .context(format!("Failed to load Wasm component (size: {} bytes)", wasm_bytes.len()))
+    }
+    
+    /// Instantiate a module with WASI  (Legacy - for backward compat with P1)
     pub async fn instantiate_with_wasi(
         &self,
         store: &mut Store<WasiState>,
         module: &Module,
     ) -> Result<Instance> {
-        // Create a linker
+        // Create a linker for core modules
         let linker = Linker::new(&self.engine);
         
-        // TODO: Add WASI functions when we set up proper WASI support
-        // For now, instantiate without WASI
+        // For now, instantiate without WASI since we're focusing on P2 components
+        // To properly support P1, we'd need WasiP1Ctx
         
         // Instantiate the module
         let instance = linker
@@ -209,6 +250,78 @@ impl WasmRuntime {
             .context("Failed to instantiate module")?;
         
         Ok(instance)
+    }
+    
+    /// Instantiate a component with WASI Preview 2 (Primary method)
+    pub async fn instantiate_component_with_wasi(
+        &self,
+        store: &mut Store<WasiState>,
+        component: &Component,
+    ) -> Result<wasmtime::component::Instance> {
+        // Create a component linker
+        let mut linker = ComponentLinker::new(&self.engine);
+        
+        // Add WASI Preview 2 interfaces to the linker
+        p2::add_to_linker_async(&mut linker)
+            .context("Failed to add WASI P2 to component linker")?;
+        
+        // Instantiate the component
+        let instance = linker
+            .instantiate_async(store, component)
+            .await
+            .context("Failed to instantiate component")?;
+        
+        Ok(instance)
+    }
+    
+    /// Execute a WASI P2 component using the Command pattern
+    pub async fn execute_component_command(
+        &self,
+        store: &mut Store<WasiState>,
+        component: &Component,
+    ) -> Result<()> {
+        // Create a component linker
+        let mut linker = ComponentLinker::new(&self.engine);
+        
+        // Add WASI Preview 2 interfaces to the linker
+        p2::add_to_linker_async(&mut linker)
+            .context("Failed to add WASI P2 to component linker")?;
+        
+        // Instantiate the Command component
+        let command = Command::instantiate_async(&mut *store, component, &linker)
+            .await
+            .context("Failed to instantiate Command component")?;
+        
+        // Execute the component's run function
+        let result = command.wasi_cli_run().call_run(&mut *store).await
+            .context("Failed to call component run function")?;
+        
+        // Check the result
+        match result {
+            Ok(()) => Ok(()),
+            Err(()) => Err(anyhow::anyhow!("Component returned error exit code")),
+        }
+    }
+    
+    /// Execute a WASI P2 component's exported function (typically for Command pattern)
+    pub async fn execute_component_function(
+        &self,
+        store: &mut Store<WasiState>,
+        instance: &wasmtime::component::Instance,
+        function_name: &str,
+    ) -> Result<()> {
+        // Get the typed function from the component
+        // For Command pattern, we typically call functions that take no args and return Result
+        let func = instance
+            .get_typed_func::<(), ()>(&mut *store, function_name)
+            .context(format!("Failed to get function '{}' from component", function_name))?;
+        
+        // Call the function
+        func.call_async(&mut *store, ())
+            .await
+            .context(format!("Failed to execute component function '{}'", function_name))?;
+        
+        Ok(())
     }
     
     /// Execute a function in the module

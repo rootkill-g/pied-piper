@@ -52,6 +52,7 @@ pub struct NetworkNode {
     publisher: ModulePublisher,
     discovery: ModuleDiscovery,
     provider: ModuleProvider,
+    loader: Arc<ModuleLoader>,
 }
 
 impl NetworkNode {
@@ -90,7 +91,7 @@ impl NetworkNode {
         // Create a module loader for the provider
         let cache_dir = std::env::current_dir()?.join(".pied-piper").join("modules");
         let loader = Arc::new(ModuleLoader::new(cache_dir).await?);
-        let provider = ModuleProvider::new(loader);
+        let provider = ModuleProvider::new(loader.clone());
 
         Ok(Self {
             swarm,
@@ -98,6 +99,7 @@ impl NetworkNode {
             publisher,
             discovery,
             provider,
+            loader,
         })
     }
 
@@ -233,7 +235,7 @@ impl NetworkNode {
         // Create module info
         let module_info = ModuleInfo {
             cid: cid.clone(),
-            name,
+            name: name.clone(),
             version,
             size: module_bytes.len(),
             dependencies: vec![],
@@ -241,9 +243,14 @@ impl NetworkNode {
             description,
         };
 
+        // Cache the module in the loader so the gateway can access it
+        info!("Caching module {} locally", cid);
+        let bytes_arc = Arc::new(module_bytes.clone());
+        self.loader.add_to_cache(&cid, module_info.clone(), bytes_arc.clone()).await;
+
         // Store module in provider
         self.provider
-            .provide_module(module_info.clone(), Arc::new(module_bytes.clone()))
+            .provide_module(module_info.clone(), bytes_arc)
             .await?;
 
         // Create DHT record for module metadata
@@ -272,12 +279,20 @@ impl NetworkNode {
         // Subscribe to announcements topic if not already subscribed
         let _ = self.swarm.behaviour_mut().gossipsub.subscribe(&topic);
         
-        // Publish announcement
-        self.swarm
+        // Publish announcement (non-fatal if no peers are subscribed)
+        match self.swarm
             .behaviour_mut()
             .gossipsub
-            .publish(topic, announcement)
-            .context("Failed to publish module announcement")?;
+            .publish(topic, announcement) {
+            Ok(_) => {
+                info!("Module announcement published to network");
+            }
+            Err(e) => {
+                // Log but don't fail - module is still stored locally and in DHT
+                tracing::warn!("Failed to broadcast announcement (no peers available): {:?}", e);
+                info!("Module is still stored locally and available for serving");
+            }
+        }
 
         Ok(cid)
     }

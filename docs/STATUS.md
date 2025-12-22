@@ -88,14 +88,15 @@
 
 ---
 
-## Phase 3: Application Deployment 🔄 IN PROGRESS (60%)
+## Phase 3: Application Deployment 🔄 IN PROGRESS (85%)
 
 ### Deployment Pipeline
 - [x] Deployment CLI commands (`deploy`)
 - [x] Module publishing to DHT
 - [x] Content-addressed storage
+- [x] Asset bundling (TAR format for HTML/CSS/JS)
+- [x] Example web application (examples/web-app)
 - [ ] Multi-module applications - TODO
-- [ ] Asset bundling (HTML/CSS/JS) - IN PROGRESS
 - [ ] Build tool for Wasm apps - TODO
 
 ### Application Registry
@@ -124,9 +125,11 @@
 - [x] WasmRequest/WasmResponse data structures
 - [x] JSON-based I/O (stdin/stdout)
 - [x] Error handling with HTML pages
-- [ ] Static file serving (HTML/CSS/JS) - TODO
-- [ ] Content-type detection - TODO
-- [ ] Caching layer - TODO
+- [x] Static file serving (HTML/CSS/JS)
+- [x] Content-type detection (20+ file types)
+- [x] TAR bundle support for multi-file apps
+- [x] Caching layer with ETag headers
+- [x] Index.html default routing
 - [ ] SSL/TLS support - TODO
 
 ---
@@ -216,19 +219,24 @@
 
 ## 🎯 Immediate Next Steps (Priority Order)
 
-### Week 1-2: Complete Asset Serving
-- [ ] Implement static file serving in gateway handler
-- [ ] Add content-type detection (MIME types)
-- [ ] Test with HTML/CSS/JS files
-- [ ] Add caching headers
-- [ ] Support index.html default routing
+### Week 1-2: Complete Asset Serving ✅ DONE
+- [x] Implement static file serving in gateway handler
+- [x] Add content-type detection (MIME types)
+- [x] TAR bundle extraction support
+- [x] Add caching headers (Cache-Control, ETag)
+- [x] Support index.html default routing
+- [x] Create example web application
 
-### Week 3: Update Examples & Test WASM I/O
-- [ ] Update `hello-api` example to use WasmRequest/WasmResponse
-- [ ] Build and test the updated example
-- [ ] Create integration tests for I/O flow
-- [ ] Document the I/O architecture
-- [ ] Create frontend example app
+### Week 3: Update Examples & Test WASM I/O ✅ DONE
+- [x] Update `hello-api` example to use WasmRequest/WasmResponse
+- [x] Build and test the updated example (260.9 kB WASM module)
+- [x] Update comprehensive documentation
+- [x] Document the I/O architecture
+- [x] Example web-app deployment created
+- [x] Fix single-node deployment (gossipsub warning)
+- [x] Create end-to-end testing guide
+- [ ] Test full deployment end-to-end with browser - TODO
+- [ ] Create integration tests for I/O flow - TODO
 
 ### Week 4: Multi-Module Support
 - [ ] Design module linking architecture
@@ -276,11 +284,11 @@
 - **Test coverage:** 40% → 80%
 
 ### Development Metrics
-- **Active development days:** 45 days
-- **Lines of code:** ~12,000
+- **Active development days:** 45+ days
+- **Lines of code:** ~13,500
 - **Number of crates:** 8
-- **External dependencies:** 45
-- **Example applications:** 1 (hello-api)
+- **External dependencies:** 46
+- **Example applications:** 2 (hello-api, web-app)
 
 ### Feature Completion
 - **Network Layer:** 100%

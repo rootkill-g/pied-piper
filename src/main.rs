@@ -253,8 +253,8 @@ async fn main() -> Result<()> {
             info!("✅ P2P node started");
             info!("   Peer ID: {}", network.local_peer_id());
             
-            // Create module loader with default cache directory
-            let cache_dir = std::env::temp_dir().join("pied-piper-cache");
+            // Create module loader with the same cache directory as deployment
+            let cache_dir = std::env::current_dir()?.join(".pied-piper").join("modules");
             let loader = Arc::new(ModuleLoader::new(cache_dir).await?);
             
             // Create and start gateway server

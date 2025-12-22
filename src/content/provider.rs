@@ -201,8 +201,8 @@ mod tests {
         let cid = ModuleCid::from_bytes(b"test");
         let info = ModuleInfo {
             cid: cid.clone(),
-            name: "test".to_string(),
-            version: "1.0.0".to_string(),
+            name: Some("test".to_string()),
+            version: Some("1.0.0".to_string()),
             size: 4,
             dependencies: vec![],
             author: None,

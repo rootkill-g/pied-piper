@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::RwLock;
+use tracing::info;
 
 /// Content identifier for a Wasm module (using Blake3)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,6 +158,7 @@ impl ModuleLoader {
     
     /// Get a module from cache by CID
     pub async fn get_from_cache(&self, cid: &ModuleCid) -> Option<(ModuleInfo, Arc<Vec<u8>>)> {
+        // Check in-memory cache first
         let info = {
             let info_cache = self.info_cache.read().await;
             info_cache.get(cid).cloned()
@@ -168,8 +170,39 @@ impl ModuleLoader {
         };
         
         match (info, bytes) {
-            (Some(info), Some(bytes)) => Some((info, bytes)),
-            _ => None,
+            (Some(info), Some(bytes)) => {
+                info!("Module {} found in memory cache", cid);
+                Some((info, bytes))
+            }
+            _ => {
+                // Try loading from disk
+                info!("Module {} not in memory, trying disk...", cid);
+                match self.load_from_disk(cid).await {
+                    Ok(bytes) => {
+                        // Create basic module info since we don't have metadata on disk
+                        let info = ModuleInfo {
+                            cid: cid.clone(),
+                            name: None,
+                            version: None,
+                            size: bytes.len(),
+                            dependencies: vec![],
+                            author: None,
+                            description: None,
+                        };
+                        
+                        // Add to memory cache for future lookups
+                        self.info_cache.write().await.insert(cid.clone(), info.clone());
+                        self.bytes_cache.write().await.insert(cid.clone(), bytes.clone());
+                        
+                        info!("Module {} loaded from disk", cid);
+                        Some((info, bytes))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load module {} from disk: {}", cid, e);
+                        None
+                    }
+                }
+            }
         }
     }
     
@@ -207,6 +240,20 @@ impl ModuleLoader {
         }
         
         Ok(bytes_arc)
+    }
+    
+    /// Add a module to the cache (used during deployment)
+    pub async fn add_to_cache(&self, cid: &ModuleCid, info: ModuleInfo, bytes: Arc<Vec<u8>>) {
+        info!("Adding module {} to cache", cid);
+        
+        // Add to in-memory cache
+        self.info_cache.write().await.insert(cid.clone(), info);
+        self.bytes_cache.write().await.insert(cid.clone(), bytes.clone());
+        
+        // Also save to disk for persistence
+        if let Err(e) = self.save_to_disk(cid, &bytes).await {
+            tracing::warn!("Failed to save module {} to disk: {}", cid, e);
+        }
     }
     
     /// Clear the in-memory cache
