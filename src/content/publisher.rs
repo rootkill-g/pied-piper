@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use libp2p::{
-    kad::{Record, RecordKey, Quorum},
+    kad::{Record, RecordKey},
     PeerId,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::wasm::loader::{ModuleCid, ModuleInfo};
 
@@ -21,6 +20,16 @@ pub struct ModuleMetadata {
     pub description: Option<String>,
     pub providers: Vec<String>, // PeerIds as strings
     pub published_at: u64, // Unix timestamp
+}
+
+/// Name registration record with conflict resolution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NameRegistration {
+    pub name: String,
+    pub cid: String,
+    pub version: Option<String>,
+    pub registered_by: String, // PeerId as string
+    pub registered_at: u64, // Unix timestamp for conflict resolution
 }
 
 /// Publisher for WebAssembly modules to the network
@@ -103,6 +112,72 @@ impl ModulePublisher {
         
         Ok(record)
     }
+
+    /// Create a name-to-CID mapping record for the latest version
+    pub fn create_latest_name_record(&self, name: &str, cid: &ModuleCid) -> Result<Record> {
+        let key = RecordKey::new(&format!("name:{}", name));
+        let value = cid.to_string().into_bytes();
+
+        let record = Record {
+            key,
+            value,
+            publisher: Some(self.local_peer_id),
+            expires: None,
+        };
+
+        info!("Created latest name record for {} -> {}", name, cid);
+
+        Ok(record)
+    }
+    
+    /// Register a persistent name with timestamp-based conflict resolution
+    /// Returns the record to be stored in DHT
+    pub fn register_persistent_name(
+        &self,
+        name: &str,
+        cid: &ModuleCid,
+        version: Option<String>,
+    ) -> Result<Record> {
+        let registration = NameRegistration {
+            name: name.to_string(),
+            cid: cid.to_string(),
+            version,
+            registered_by: self.local_peer_id.to_string(),
+            registered_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        };
+        
+        let value = serde_json::to_vec(&registration)
+            .context("Failed to serialize name registration")?;
+        
+        // Use name as key for global name resolution
+        let key = RecordKey::new(&format!("persistent-name:{}", name));
+        
+        let record = Record {
+            key,
+            value,
+            publisher: Some(self.local_peer_id),
+            expires: None, // Persistent names don't expire
+        };
+        
+        info!(
+            "Registered persistent name '{}' -> {} (registered at {})",
+            name, cid, registration.registered_at
+        );
+        
+        Ok(record)
+    }
+    
+    /// Resolve conflict between two name registrations (older wins)
+    /// Returns true if new_registration should replace existing
+    pub fn should_replace_registration(
+        existing: &NameRegistration,
+        new: &NameRegistration,
+    ) -> bool {
+        // Older registration wins (first-come-first-served)
+        new.registered_at < existing.registered_at
+    }
     
     /// Create announcement message for GossipSub
     pub fn create_announcement_message(
@@ -151,8 +226,8 @@ mod tests {
         let cid = ModuleCid::from_bytes(b"test module");
         let info = ModuleInfo {
             cid: cid.clone(),
-            name: "test-module".to_string(),
-            version: "1.0.0".to_string(),
+            name: Some("test-module".to_string()),
+            version: Some("1.0.0".to_string()),
             size: 100,
             dependencies: vec![],
             author: Some("test".to_string()),

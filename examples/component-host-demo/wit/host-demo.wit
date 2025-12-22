@@ -1,0 +1,27 @@
+package piedpiper:component-host-demo;
+
+interface http {
+  get: func(url: string) -> (status: u32, body: list<u8>);
+  post: func(url: string, body: list<u8>) -> (status: u32, body: list<u8>);
+}
+
+interface storage {
+  get: func(key: string) -> (found: bool, value: list<u8>);
+  set: func(key: string, value: list<u8>) -> bool;
+  delete: func(key: string) -> bool;
+  list-count: func() -> u32;
+}
+
+interface host {
+  log: func(message: string);
+  now-millis: func() -> s64;
+  random-u32: func() -> u32;
+}
+
+world component-host-demo {
+  import http;
+  import storage;
+  import host;
+
+  export wasi:cli/run@0.2.4;
+}

@@ -7,20 +7,20 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::network::NetworkNode;
+use crate::network::NetworkClient;
 use crate::wasm::{ModuleLoader, WasmRuntime, WasmRuntimeConfig};
 use super::server::GatewayConfig;
 
 /// Handles HTTP requests and routes them to WASM modules
 pub struct RequestHandler {
-    network: Arc<Mutex<NetworkNode>>,
+    network: NetworkClient,
     loader: Arc<ModuleLoader>,
     config: GatewayConfig,
 }
 
 impl RequestHandler {
     pub fn new(
-        network: Arc<Mutex<NetworkNode>>,
+        network: NetworkClient,
         loader: Arc<ModuleLoader>,
         config: GatewayConfig,
     ) -> Self {
@@ -121,16 +121,128 @@ impl RequestHandler {
             return Ok(Some(bytes.to_vec()));
         }
         
-        // TODO: Network fetch when fully implemented
+        // Network fetch
+        if let Some(metadata) = self.network.find_module_by_cid(&module_cid).await? {
+            let dependencies = metadata
+                .dependencies
+                .iter()
+                .map(|dep| ModuleCid::new(dep.clone()))
+                .collect::<Vec<_>>();
+
+             // We have metadata, try to fetch from one of the providers
+             for provider_str in metadata.providers {
+                 if let Ok(peer_id) = provider_str.parse() {
+                     if let Ok(Some(bytes)) = self.network.fetch_module(&module_cid, peer_id).await {
+                         // Cache it before returning? 
+                         // Note: fetch_module implies fetching bytes. 
+                         // NetworkNode::handle_command calls provider.handle_request which returns bytes.
+                         // But we should cache it locally.
+                         // The current `NetworkNode` logic for `FetchModule` command does NOT cache automatically.
+                         // It just returns bytes via channel.
+                         // So we should cache it here.
+                         
+                         // Reconstruct info for cache (minimal info)
+                         let info = crate::wasm::loader::ModuleInfo {
+                             cid: module_cid.clone(),
+                             name: metadata.name.clone(),
+                             version: metadata.version.clone(),
+                             size: bytes.len(),
+                             dependencies: dependencies.clone(),
+                             author: metadata.author.clone(),
+                             description: metadata.description.clone(),
+                         };
+                         let bytes_arc = Arc::new(bytes.clone());
+                         self.loader.add_to_cache(&module_cid, info, bytes_arc).await;
+
+                         if let Err(err) = self.fetch_dependencies(&dependencies).await {
+                             warn!("Failed to fetch dependencies for {}: {}", cid, err);
+                         }
+                         
+                         return Ok(Some(bytes));
+                     }
+                 }
+             }
+        }
+        
         Ok(None)
+    }
+
+    async fn fetch_dependencies(&self, dependencies: &[crate::wasm::ModuleCid]) -> Result<()> {
+        use crate::wasm::ModuleCid;
+        use std::collections::{HashSet, VecDeque};
+
+        let mut queue: VecDeque<ModuleCid> = dependencies.iter().cloned().collect();
+        let mut seen = HashSet::new();
+
+        while let Some(dep_cid) = queue.pop_front() {
+            if !seen.insert(dep_cid.clone()) {
+                continue;
+            }
+
+            if self.loader.get_from_cache(&dep_cid).await.is_some() {
+                continue;
+            }
+
+            let metadata = match self.network.find_module_by_cid(&dep_cid).await? {
+                Some(metadata) => metadata,
+                None => {
+                    warn!("Dependency {} not found in network metadata", dep_cid);
+                    continue;
+                }
+            };
+
+            let dep_dependencies = metadata
+                .dependencies
+                .iter()
+                .map(|dep| ModuleCid::new(dep.clone()))
+                .collect::<Vec<_>>();
+
+            let mut fetched = None;
+            for provider_str in metadata.providers {
+                if let Ok(peer_id) = provider_str.parse() {
+                    if let Ok(Some(bytes)) = self.network.fetch_module(&dep_cid, peer_id).await {
+                        fetched = Some(bytes);
+                        break;
+                    }
+                }
+            }
+
+            let bytes = match fetched {
+                Some(bytes) => bytes,
+                None => {
+                    warn!("Failed to fetch dependency {} from any provider", dep_cid);
+                    continue;
+                }
+            };
+
+            let info = crate::wasm::loader::ModuleInfo {
+                cid: dep_cid.clone(),
+                name: metadata.name.clone(),
+                version: metadata.version.clone(),
+                size: bytes.len(),
+                dependencies: dep_dependencies.clone(),
+                author: metadata.author.clone(),
+                description: metadata.description.clone(),
+            };
+
+            let bytes_arc = Arc::new(bytes.clone());
+            self.loader.add_to_cache(&dep_cid, info, bytes_arc).await;
+            for dep in dep_dependencies {
+                if !seen.contains(&dep) {
+                    queue.push_back(dep);
+                }
+            }
+        }
+
+        Ok(())
     }
     
     /// Resolve name to CID
     async fn resolve_name(&self, name: &str) -> Result<Option<String>> {
-        let mut network = self.network.lock().await;
-        let results = network.search_modules_by_name(name).await?;
+        let results = self.network.search_modules_by_name(name).await?;
         
-        Ok(results.first().map(|info| info.cid.0.clone()))
+        // results is Vec<ModuleMetadata>
+        Ok(results.first().map(|meta| meta.cid.clone()))
     }
     
     /// Check if string looks like CID
@@ -140,7 +252,41 @@ impl RequestHandler {
     
     /// Serve frontend HTML (placeholder - will be enhanced)
     async fn serve_frontend(&self, bytes: &[u8], path: &str) -> Response {
-        // Check if this is a bundled application (TAR archive)
+        // Check if this is a bundled application (bincode serialized AppBundle)
+        if let Ok(bundle) = crate::bundle::AppBundle::from_bytes(bytes) {
+            info!("Detected AppBundle: {} assets, {} bytes", 
+                bundle.assets.len(), 
+                bundle.metadata().total_size);
+            
+            // Determine which asset to serve
+            let asset_path = if path.is_empty() || path == "/" {
+                "index.html"
+            } else {
+                path.trim_start_matches('/')
+            };
+            
+            // Try to serve the requested asset
+            if let Some(asset_data) = bundle.get_asset(asset_path) {
+                let content_type = crate::bundle::AppBundle::content_type_for_path(asset_path);
+                info!("Serving asset: {} ({} bytes, {})", asset_path, asset_data.len(), content_type);
+                
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .header(header::CACHE_CONTROL, "public, max-age=3600")
+                    .body(asset_data.clone().into())
+                    .unwrap();
+            }
+            
+            // Asset not found in bundle, return 404 with asset listing
+            let asset_list = bundle.asset_paths().join(", ");
+            return self.error_response(
+                StatusCode::NOT_FOUND,
+                &format!("Asset '{}' not found in bundle. Available assets: {}", asset_path, asset_list),
+            );
+        }
+        
+        // Check if this is a TAR archive (legacy support)
         if Self::is_tar_archive(bytes) {
             // Try to serve index.html from the bundle
             let index_path = if path.is_empty() || path == "/" {
@@ -213,13 +359,38 @@ impl RequestHandler {
     async fn serve_static_file(&self, bytes: &[u8], path: &str) -> Response {
         // Determine content type from extension
         let content_type = Self::guess_content_type(path);
+        let path = path.trim_start_matches('/');
         
-        // Check if this is a bundled asset (TAR format) or single file
+        // Check if this is a bundled application (bincode serialized AppBundle)
+        if let Ok(bundle) = crate::bundle::AppBundle::from_bytes(bytes) {
+            // Try to get the requested asset from bundle
+            if let Some(asset_data) = bundle.get_asset(path) {
+                let content_type = crate::bundle::AppBundle::content_type_for_path(path);
+                info!("Serving static file '{}' from bundle ({} bytes, {})", path, asset_data.len(), content_type);
+                
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                    .header(header::ETAG, format!("\"{}\"", blake3::hash(asset_data).to_hex()))
+                    .body(asset_data.clone().into())
+                    .unwrap();
+            }
+            
+            // Asset not found in bundle
+            let asset_list = bundle.asset_paths().join(", ");
+            return self.error_response(
+                StatusCode::NOT_FOUND,
+                &format!("File '{}' not found in bundle. Available assets: {}", path, asset_list),
+            );
+        }
+        
+        // Check if this is a TAR archive (legacy support)
         if Self::is_tar_archive(bytes) {
             // Extract the requested file from the TAR archive
             match Self::extract_from_tar(bytes, path).await {
                 Ok(Some(file_data)) => {
-                    info!("Serving static file '{}' from bundle ({} bytes)", path, file_data.len());
+                    info!("Serving static file '{}' from TAR bundle ({} bytes)", path, file_data.len());
                     
                     Response::builder()
                         .status(StatusCode::OK)
@@ -504,7 +675,7 @@ impl RequestHandler {
                 
                 // Parse the WASM response from stdout
                 let stdout_str = String::from_utf8_lossy(&stdout_bytes).to_string();
-                info!("WASM output: {} bytes", stdout_bytes.len());
+                info!("WASM output: {} bytes", stdout_str.len());
                 debug!("WASM response: {}", stdout_str);
                 
                 match WasmResponse::from_json(&stdout_str) {

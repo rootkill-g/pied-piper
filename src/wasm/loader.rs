@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -72,6 +72,18 @@ pub struct ModuleLoader {
     
     /// In-memory cache of module bytes
     bytes_cache: Arc<RwLock<HashMap<ModuleCid, Arc<Vec<u8>>>>>,
+
+    /// LRU order for cached module bytes (oldest at front)
+    lru_order: Arc<RwLock<VecDeque<ModuleCid>>>,
+
+    /// Current memory usage in bytes
+    current_bytes: Arc<RwLock<usize>>,
+
+    /// Maximum number of cached modules
+    max_entries: usize,
+
+    /// Maximum cached bytes
+    max_bytes: usize,
 }
 
 impl ModuleLoader {
@@ -86,6 +98,10 @@ impl ModuleLoader {
             cache_dir,
             info_cache: Arc::new(RwLock::new(HashMap::new())),
             bytes_cache: Arc::new(RwLock::new(HashMap::new())),
+            lru_order: Arc::new(RwLock::new(VecDeque::new())),
+            current_bytes: Arc::new(RwLock::new(0)),
+            max_entries: 128,
+            max_bytes: 256 * 1024 * 1024,
         })
     }
     
@@ -113,15 +129,8 @@ impl ModuleLoader {
         let bytes_arc = Arc::new(bytes);
         
         // Cache the module
-        {
-            let mut info_cache = self.info_cache.write().await;
-            info_cache.insert(cid.clone(), info.clone());
-        }
-        
-        {
-            let mut bytes_cache = self.bytes_cache.write().await;
-            bytes_cache.insert(cid.clone(), bytes_arc.clone());
-        }
+        self.insert_into_cache(cid.clone(), info.clone(), bytes_arc.clone())
+            .await;
         
         Ok((info, bytes_arc))
     }
@@ -143,15 +152,8 @@ impl ModuleLoader {
         let bytes_arc = Arc::new(bytes);
         
         // Cache the module
-        {
-            let mut info_cache = self.info_cache.write().await;
-            info_cache.insert(cid.clone(), info.clone());
-        }
-        
-        {
-            let mut bytes_cache = self.bytes_cache.write().await;
-            bytes_cache.insert(cid.clone(), bytes_arc.clone());
-        }
+        self.insert_into_cache(cid.clone(), info.clone(), bytes_arc.clone())
+            .await;
         
         Ok((info, bytes_arc))
     }
@@ -172,6 +174,7 @@ impl ModuleLoader {
         match (info, bytes) {
             (Some(info), Some(bytes)) => {
                 info!("Module {} found in memory cache", cid);
+                self.touch_lru(cid).await;
                 Some((info, bytes))
             }
             _ => {
@@ -191,8 +194,8 @@ impl ModuleLoader {
                         };
                         
                         // Add to memory cache for future lookups
-                        self.info_cache.write().await.insert(cid.clone(), info.clone());
-                        self.bytes_cache.write().await.insert(cid.clone(), bytes.clone());
+                        self.insert_into_cache(cid.clone(), info.clone(), bytes.clone())
+                            .await;
                         
                         info!("Module {} loaded from disk", cid);
                         Some((info, bytes))
@@ -232,13 +235,7 @@ impl ModuleLoader {
             .context("Failed to read module from disk")?;
         
         let bytes_arc = Arc::new(bytes);
-        
-        // Update memory cache
-        {
-            let mut bytes_cache = self.bytes_cache.write().await;
-            bytes_cache.insert(cid.clone(), bytes_arc.clone());
-        }
-        
+
         Ok(bytes_arc)
     }
     
@@ -247,8 +244,7 @@ impl ModuleLoader {
         info!("Adding module {} to cache", cid);
         
         // Add to in-memory cache
-        self.info_cache.write().await.insert(cid.clone(), info);
-        self.bytes_cache.write().await.insert(cid.clone(), bytes.clone());
+        self.insert_into_cache(cid.clone(), info, bytes.clone()).await;
         
         // Also save to disk for persistence
         if let Err(e) = self.save_to_disk(cid, &bytes).await {
@@ -263,6 +259,12 @@ impl ModuleLoader {
         
         let mut bytes_cache = self.bytes_cache.write().await;
         bytes_cache.clear();
+
+        let mut lru_order = self.lru_order.write().await;
+        lru_order.clear();
+
+        let mut current_bytes = self.current_bytes.write().await;
+        *current_bytes = 0;
     }
     
     /// Get cache statistics
@@ -270,6 +272,170 @@ impl ModuleLoader {
         let info_count = self.info_cache.read().await.len();
         let bytes_count = self.bytes_cache.read().await.len();
         (info_count, bytes_count)
+    }
+    
+    /// Load a module with all its dependencies
+    /// Returns a list of (ModuleInfo, bytes) tuples in dependency order
+    pub async fn load_with_dependencies(&self, cid: &ModuleCid) -> Result<Vec<(ModuleInfo, Arc<Vec<u8>>)>> {
+        let mut loaded = HashMap::new();
+        let mut result = Vec::new();
+        
+        // Use DFS to resolve dependencies
+        self.resolve_dependencies_recursive(cid, &mut loaded, &mut result).await?;
+        
+        Ok(result)
+    }
+    
+    /// Recursive helper for dependency resolution
+    fn resolve_dependencies_recursive<'a>(
+        &'a self,
+        cid: &'a ModuleCid,
+        loaded: &'a mut HashMap<ModuleCid, ()>,
+        result: &'a mut Vec<(ModuleInfo, Arc<Vec<u8>>)>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
+        Box::pin(async move {
+            // Skip if already loaded
+            if loaded.contains_key(cid) {
+                return Ok(());
+            }
+            
+            // Get module from cache
+            let (info, bytes) = self.get_from_cache(cid).await
+                .ok_or_else(|| anyhow::anyhow!("Module {} not found in cache", cid))?;
+            
+            // Mark as loaded to prevent cycles
+            loaded.insert(cid.clone(), ());
+            
+            // Recursively load dependencies first
+            for dep_cid in &info.dependencies.clone() {
+                self.resolve_dependencies_recursive(dep_cid, loaded, result).await?;
+            }
+            
+            // Add current module after dependencies
+            result.push((info, bytes));
+            
+            Ok(())
+        })
+    }
+    
+    /// Update module metadata (including dependencies)
+    pub async fn update_module_info(&self, cid: &ModuleCid, info: ModuleInfo) -> Result<()> {
+        // Save metadata to disk first
+        let metadata_path = self.cache_dir.join(format!("{}.json", cid.as_str()));
+        let json = serde_json::to_string_pretty(&info)?;
+        fs::write(&metadata_path, json).await?;
+        
+        // Then update cache
+        let mut info_cache = self.info_cache.write().await;
+        info_cache.insert(cid.clone(), info);
+        
+        Ok(())
+    }
+    
+    /// Load module metadata from disk
+    pub async fn load_module_info(&self, cid: &ModuleCid) -> Result<Option<ModuleInfo>> {
+        let metadata_path = self.cache_dir.join(format!("{}.json", cid.as_str()));
+        
+        if metadata_path.exists() {
+            let json = fs::read_to_string(&metadata_path).await?;
+            let info: ModuleInfo = serde_json::from_str(&json)?;
+            
+            // Update cache
+            let mut info_cache = self.info_cache.write().await;
+            info_cache.insert(cid.clone(), info.clone());
+            
+            Ok(Some(info))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List cached module CIDs from disk
+    pub async fn list_cached_modules(&self) -> Result<Vec<ModuleCid>> {
+        let mut entries = fs::read_dir(&self.cache_dir)
+            .await
+            .context("Failed to read cache directory")?;
+        let mut cids = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("wasm") {
+                continue;
+            }
+
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                cids.push(ModuleCid::new(stem.to_string()));
+            }
+        }
+
+        Ok(cids)
+    }
+
+    async fn insert_into_cache(
+        &self,
+        cid: ModuleCid,
+        info: ModuleInfo,
+        bytes: Arc<Vec<u8>>,
+    ) {
+        let mut info_cache = self.info_cache.write().await;
+        let mut bytes_cache = self.bytes_cache.write().await;
+        let mut current_bytes = self.current_bytes.write().await;
+
+        if let Some(existing) = bytes_cache.get(&cid) {
+            *current_bytes = current_bytes.saturating_sub(existing.len());
+        }
+
+        info_cache.insert(cid.clone(), info);
+        bytes_cache.insert(cid.clone(), bytes.clone());
+        *current_bytes = current_bytes.saturating_add(bytes.len());
+
+        drop(bytes_cache);
+        drop(info_cache);
+        drop(current_bytes);
+
+        self.touch_lru(&cid).await;
+        self.evict_if_needed().await;
+    }
+
+    async fn touch_lru(&self, cid: &ModuleCid) {
+        let mut lru_order = self.lru_order.write().await;
+        if let Some(pos) = lru_order.iter().position(|existing| existing == cid) {
+            lru_order.remove(pos);
+        }
+        lru_order.push_back(cid.clone());
+    }
+
+    async fn evict_if_needed(&self) {
+        loop {
+            let (entries, bytes) = {
+                let info_cache = self.info_cache.read().await;
+                let current_bytes = self.current_bytes.read().await;
+                (info_cache.len(), *current_bytes)
+            };
+
+            if entries <= self.max_entries && bytes <= self.max_bytes {
+                break;
+            }
+
+            let oldest = {
+                let mut lru_order = self.lru_order.write().await;
+                lru_order.pop_front()
+            };
+
+            let oldest = match oldest {
+                Some(oldest) => oldest,
+                None => break,
+            };
+
+            let mut info_cache = self.info_cache.write().await;
+            let mut bytes_cache = self.bytes_cache.write().await;
+            let mut current_bytes = self.current_bytes.write().await;
+
+            if let Some(bytes) = bytes_cache.remove(&oldest) {
+                *current_bytes = current_bytes.saturating_sub(bytes.len());
+            }
+            info_cache.remove(&oldest);
+        }
     }
 }
 
@@ -306,5 +472,176 @@ mod tests {
         assert!(result.is_ok());
         let (info, _) = result.unwrap();
         assert_eq!(info.name, Some("test".to_string()));
+    }
+}
+
+/// Version matching utilities for dependency resolution
+pub mod version {
+    use semver::{Version, VersionReq};
+    use anyhow::{Context, Result};
+    
+    /// Parse a version string into a semver Version
+    pub fn parse_version(version_str: &str) -> Result<Version> {
+        Version::parse(version_str)
+            .with_context(|| format!("Invalid semver version: {}", version_str))
+    }
+    
+    /// Parse a version requirement string (e.g., "^1.0.0", "~1.2.3", ">=2.0.0")
+    pub fn parse_requirement(req_str: &str) -> Result<VersionReq> {
+        VersionReq::parse(req_str)
+            .with_context(|| format!("Invalid version requirement: {}", req_str))
+    }
+    
+    /// Check if a version satisfies a requirement
+    pub fn matches(version: &str, requirement: &str) -> Result<bool> {
+        let version = parse_version(version)?;
+        let req = parse_requirement(requirement)?;
+        Ok(req.matches(&version))
+    }
+    
+    /// Find the best matching version from a list of available versions
+    /// Returns the highest version that satisfies the requirement
+    pub fn find_best_match(
+        available: &[String],
+        requirement: &str,
+    ) -> Result<Option<String>> {
+        let req = parse_requirement(requirement)?;
+        
+        let mut matching_versions: Vec<Version> = available
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .filter(|v| req.matches(v))
+            .collect();
+        
+        if matching_versions.is_empty() {
+            return Ok(None);
+        }
+        
+        // Sort in descending order to get the highest version
+        matching_versions.sort_by(|a, b| b.cmp(a));
+        
+        Ok(Some(matching_versions[0].to_string()))
+    }
+    
+    /// Find the latest version from a list (highest semver)
+    pub fn find_latest(available: &[String]) -> Option<String> {
+        let mut versions: Vec<Version> = available
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .collect();
+        
+        if versions.is_empty() {
+            return None;
+        }
+        
+        versions.sort_by(|a, b| b.cmp(a));
+        Some(versions[0].to_string())
+    }
+    
+    /// Check if a version string is a valid semver version
+    pub fn is_valid_version(version_str: &str) -> bool {
+        Version::parse(version_str).is_ok()
+    }
+    
+    /// Check if a requirement string is valid
+    pub fn is_valid_requirement(req_str: &str) -> bool {
+        VersionReq::parse(req_str).is_ok()
+    }
+    
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        
+        #[test]
+        fn test_parse_version() {
+            assert!(parse_version("1.0.0").is_ok());
+            assert!(parse_version("0.1.2").is_ok());
+            assert!(parse_version("invalid").is_err());
+        }
+        
+        #[test]
+        fn test_parse_requirement() {
+            assert!(parse_requirement("^1.0.0").is_ok());
+            assert!(parse_requirement("~1.2.3").is_ok());
+            assert!(parse_requirement(">=2.0.0").is_ok());
+            assert!(parse_requirement("1.0.0").is_ok());
+            assert!(parse_requirement("invalid").is_err());
+        }
+        
+        #[test]
+        fn test_matches() {
+            assert!(matches("1.2.3", "^1.0.0").unwrap());
+            assert!(matches("1.2.3", "~1.2.0").unwrap());
+            assert!(matches("2.0.0", ">=2.0.0").unwrap());
+            assert!(!matches("0.9.0", "^1.0.0").unwrap());
+        }
+        
+        #[test]
+        fn test_find_best_match() {
+            let available = vec![
+                "1.0.0".to_string(),
+                "1.1.0".to_string(),
+                "1.2.0".to_string(),
+                "2.0.0".to_string(),
+            ];
+            
+            // ^1.0.0 should match 1.2.0 (highest 1.x)
+            assert_eq!(
+                find_best_match(&available, "^1.0.0").unwrap(),
+                Some("1.2.0".to_string())
+            );
+            
+            // ~1.1.0 should match 1.1.0
+            assert_eq!(
+                find_best_match(&available, "~1.1.0").unwrap(),
+                Some("1.1.0".to_string())
+            );
+            
+            // >=2.0.0 should match 2.0.0
+            assert_eq!(
+                find_best_match(&available, ">=2.0.0").unwrap(),
+                Some("2.0.0".to_string())
+            );
+            
+            // ^3.0.0 should match nothing
+            assert_eq!(
+                find_best_match(&available, "^3.0.0").unwrap(),
+                None
+            );
+        }
+        
+        #[test]
+        fn test_find_latest() {
+            let available = vec![
+                "1.0.0".to_string(),
+                "2.1.0".to_string(),
+                "1.5.0".to_string(),
+                "2.0.0".to_string(),
+            ];
+            
+            assert_eq!(find_latest(&available), Some("2.1.0".to_string()));
+        }
+        
+        #[test]
+        fn test_find_latest_empty() {
+            let available: Vec<String> = vec![];
+            assert_eq!(find_latest(&available), None);
+        }
+        
+        #[test]
+        fn test_is_valid_version() {
+            assert!(is_valid_version("1.0.0"));
+            assert!(is_valid_version("0.1.2"));
+            assert!(!is_valid_version("invalid"));
+            assert!(!is_valid_version("1.0"));
+        }
+        
+        #[test]
+        fn test_is_valid_requirement() {
+            assert!(is_valid_requirement("^1.0.0"));
+            assert!(is_valid_requirement("~1.2.3"));
+            assert!(is_valid_requirement(">=2.0.0"));
+            assert!(!is_valid_requirement("invalid"));
+        }
     }
 }

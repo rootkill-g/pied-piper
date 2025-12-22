@@ -53,8 +53,28 @@ pub enum Commands {
 
     /// Deploy a WebAssembly application
     Deploy {
-        /// Path to the WASM module file
+        /// Path to the WASM module file or manifest.yaml
         manifest: PathBuf,
+
+        /// Optional assets directory (HTML, CSS, JS, etc.)
+        #[arg(short, long)]
+        assets: Option<PathBuf>,
+
+        /// Name of the module (overrides manifest)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Version of the module (overrides manifest)
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Author
+        #[arg(short, long)]
+        author: Option<String>,
     },
     
     /// Search for modules by name
@@ -94,6 +114,22 @@ pub enum Commands {
         /// HTTP listening address
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: String,
+        
+        /// HTTPS listening address (if TLS enabled)
+        #[arg(long, default_value = "127.0.0.1:8443")]
+        https_listen: String,
+        
+        /// Enable TLS/HTTPS
+        #[arg(long)]
+        tls: bool,
+        
+        /// Path to TLS certificate file (PEM format)
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        
+        /// Path to TLS private key file (PEM format)
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
         
         /// TCP port for P2P network
         #[arg(long, default_value = "0")]

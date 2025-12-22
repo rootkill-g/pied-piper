@@ -139,6 +139,21 @@ impl ModuleProvider {
         
         ModuleResponse::SearchResults { modules: results }
     }
+
+    /// Search local module info by name (for local aggregation)
+    pub async fn search_by_name(&self, name: &str) -> Vec<ModuleInfo> {
+        let info_map = self.module_info.read().await;
+        info_map
+            .values()
+            .filter(|info| {
+                info.name
+                    .as_ref()
+                    .map(|n| n.contains(name))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
+    }
     
     async fn handle_list_modules(&self) -> ModuleResponse {
         debug!("Handling ListModules request");
@@ -195,7 +210,8 @@ mod tests {
     
     #[tokio::test]
     async fn test_provide_and_get_module() {
-        let loader = Arc::new(ModuleLoader::new("/tmp/test"));
+        use std::path::PathBuf;
+        let loader = Arc::new(ModuleLoader::new(PathBuf::from("/tmp/test")).await.unwrap());
         let provider = ModuleProvider::new(loader);
         
         let cid = ModuleCid::from_bytes(b"test");

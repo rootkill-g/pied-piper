@@ -12,9 +12,11 @@ pub mod router;
 pub mod resolver;
 pub mod handler;
 pub mod io;
+pub mod tls;
 
 pub use server::{GatewayServer, GatewayConfig};
 pub use router::Router;
 pub use resolver::ContentResolver;
 pub use handler::{RequestHandler, WasmHandler};
 pub use io::{WasmRequest, WasmResponse};
+pub use tls::{TlsConfig, default_cert_dir, ensure_cert_dir};

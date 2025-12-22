@@ -1,4 +1,4 @@
-use libp2p::{gossipsub, identify, kad, mdns, ping, request_response, swarm::NetworkBehaviour};
+use libp2p::{gossipsub, identify, kad, mdns, ping, relay, dcutr, request_response, swarm::NetworkBehaviour};
 use crate::content::protocol::ContentProtocol;
 
 /// The main network behaviour combining all libp2p protocols
@@ -22,6 +22,12 @@ pub struct PiedPiperBehaviour {
     
     /// Request-Response protocol for module distribution
     pub content: ContentProtocol,
+
+    /// Circuit relay for NAT traversal
+    pub relay: relay::client::Behaviour,
+
+    /// Direct Connection Upgrade through Relay (hole-punching)
+    pub dcutr: dcutr::Behaviour,
 }
 
 /// Events emitted by the network behaviour
@@ -33,6 +39,8 @@ pub enum PiedPiperEvent {
     Ping(ping::Event),
     Gossipsub(gossipsub::Event),
     Content(request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>),
+    Relay(relay::client::Event),
+    Dcutr(dcutr::Event),
 }
 
 impl From<kad::Event> for PiedPiperEvent {
@@ -68,5 +76,17 @@ impl From<gossipsub::Event> for PiedPiperEvent {
 impl From<request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>> for PiedPiperEvent {
     fn from(event: request_response::Event<crate::content::protocol::ModuleRequest, crate::content::protocol::ModuleResponse>) -> Self {
         PiedPiperEvent::Content(event)
+    }
+}
+
+impl From<relay::client::Event> for PiedPiperEvent {
+    fn from(event: relay::client::Event) -> Self {
+        PiedPiperEvent::Relay(event)
+    }
+}
+
+impl From<dcutr::Event> for PiedPiperEvent {
+    fn from(event: dcutr::Event) -> Self {
+        PiedPiperEvent::Dcutr(event)
     }
 }

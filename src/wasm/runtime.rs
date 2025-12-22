@@ -1,18 +1,24 @@
 use anyhow::{Context, Result};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wasmtime::*;
 use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView, WasiCtxView};
+use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::p2::{self, pipe::{MemoryInputPipe, MemoryOutputPipe}, bindings::Command};
+use super::host::HostFunctions;
 
 /// WASI state for the store implementing WasiView
 pub struct WasiState {
     /// WASI context
     wasi_ctx: WasiCtx,
-    
+
     /// Resource table for component model
     resource_table: ResourceTable,
+
+    /// WASI Preview 1 context (core modules)
+    wasi_p1: WasiP1Ctx,
     
     /// Output buffer (stdout) - for capturing output
     pub stdout_buffer: Arc<Mutex<Vec<u8>>>,
@@ -35,17 +41,24 @@ impl WasiState {
         
         let stdout_pipe = Arc::new(MemoryOutputPipe::new(4096));
         let stderr_pipe = Arc::new(MemoryOutputPipe::new(4096));
-        let stdin_pipe = MemoryInputPipe::new(stdin_data);
+        let stdin_pipe = MemoryInputPipe::new(stdin_data.clone());
         
         let wasi_ctx = WasiCtxBuilder::new()
             .stdin(stdin_pipe)
             .stdout(stdout_pipe.clone())
             .stderr(stderr_pipe.clone())
             .build();
+
+        let wasi_p1 = WasiCtxBuilder::new()
+            .stdin(MemoryInputPipe::new(stdin_data))
+            .stdout(stdout_pipe.clone())
+            .stderr(stderr_pipe.clone())
+            .build_p1();
         
         Self {
             wasi_ctx,
             resource_table: ResourceTable::new(),
+            wasi_p1,
             stdout_buffer,
             stderr_buffer,
             stdout_pipe,
@@ -238,11 +251,16 @@ impl WasmRuntime {
         module: &Module,
     ) -> Result<Instance> {
         // Create a linker for core modules
-        let linker = Linker::new(&self.engine);
-        
-        // For now, instantiate without WASI since we're focusing on P2 components
-        // To properly support P1, we'd need WasiP1Ctx
-        
+        let mut linker = Linker::new(&self.engine);
+
+        // Wire host functions for core modules (HTTP, storage, crypto, etc.)
+        let host_functions = HostFunctions::new();
+        host_functions.add_to_linker(&mut linker)?;
+
+        // Wire WASI Preview 1 for core modules
+        wasmtime_wasi::p1::add_to_linker_async(&mut linker, |state| &mut state.wasi_p1)
+            .context("Failed to add WASI P1 to core linker")?;
+
         // Instantiate the module
         let instance = linker
             .instantiate_async(store, module)
@@ -264,6 +282,10 @@ impl WasmRuntime {
         // Add WASI Preview 2 interfaces to the linker
         p2::add_to_linker_async(&mut linker)
             .context("Failed to add WASI P2 to component linker")?;
+
+        // Add custom host functions for components
+        let host_functions = HostFunctions::new();
+        host_functions.add_to_component_linker(&mut linker)?;
         
         // Instantiate the component
         let instance = linker
@@ -286,15 +308,29 @@ impl WasmRuntime {
         // Add WASI Preview 2 interfaces to the linker
         p2::add_to_linker_async(&mut linker)
             .context("Failed to add WASI P2 to component linker")?;
+
+        // Add custom host functions for components
+        let host_functions = HostFunctions::new();
+        host_functions.add_to_component_linker(&mut linker)?;
         
         // Instantiate the Command component
         let command = Command::instantiate_async(&mut *store, component, &linker)
             .await
             .context("Failed to instantiate Command component")?;
         
-        // Execute the component's run function
-        let result = command.wasi_cli_run().call_run(&mut *store).await
-            .context("Failed to call component run function")?;
+        // Execute the component's run function with timeout
+        let result = self
+            .run_with_timeout(
+                async {
+                    command
+                        .wasi_cli_run()
+                        .call_run(&mut *store)
+                        .await
+                        .context("Failed to call component run function")
+                },
+                "component command",
+            )
+            .await?;
         
         // Check the result
         match result {
@@ -316,10 +352,19 @@ impl WasmRuntime {
             .get_typed_func::<(), ()>(&mut *store, function_name)
             .context(format!("Failed to get function '{}' from component", function_name))?;
         
-        // Call the function
-        func.call_async(&mut *store, ())
-            .await
-            .context(format!("Failed to execute component function '{}'", function_name))?;
+        // Call the function with timeout
+        self.run_with_timeout(
+            async {
+                func.call_async(&mut *store, ())
+                    .await
+                    .context(format!(
+                        "Failed to execute component function '{}'",
+                        function_name
+                    ))
+            },
+            &format!("component function '{}'", function_name),
+        )
+        .await?;
         
         Ok(())
     }
@@ -340,10 +385,16 @@ impl WasmRuntime {
         // Prepare results buffer
         let mut results = vec![Val::I32(0); func.ty(&*store).results().len()];
         
-        // Call the function
-        func.call_async(&mut *store, args, &mut results)
-            .await
-            .context(format!("Failed to execute function '{}'", function_name))?;
+        // Call the function with timeout
+        self.run_with_timeout(
+            async {
+                func.call_async(&mut *store, args, &mut results)
+                    .await
+                    .context(format!("Failed to execute function '{}'", function_name))
+            },
+            &format!("function '{}'", function_name),
+        )
+        .await?;
         
         Ok(results)
     }
@@ -354,6 +405,24 @@ impl WasmRuntime {
             store.get_fuel().ok()
         } else {
             None
+        }
+    }
+
+    async fn run_with_timeout<F, T>(&self, fut: F, action: &str) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        if self.config.max_execution_time == Duration::from_secs(0) {
+            return fut.await;
+        }
+
+        match tokio::time::timeout(self.config.max_execution_time, fut).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!(
+                "Execution timed out after {:?} during {}",
+                self.config.max_execution_time,
+                action
+            )),
         }
     }
     
