@@ -64,10 +64,7 @@ pub enum CrdtOperation {
         timestamp: Timestamp,
     },
     /// LWW-Map remove operation
-    LwwMapRemove {
-        key: String,
-        timestamp: Timestamp,
-    },
+    LwwMapRemove { key: String, timestamp: Timestamp },
     /// OR-Set add operation
     OrSetAdd {
         key: String,
@@ -75,10 +72,7 @@ pub enum CrdtOperation {
         token: Token,
     },
     /// OR-Set remove operation
-    OrSetRemove {
-        key: String,
-        tokens: Vec<Token>,
-    },
+    OrSetRemove { key: String, tokens: Vec<Token> },
 }
 
 #[cfg(test)]
@@ -100,7 +94,7 @@ mod tests {
     fn test_timestamp_now() {
         let ts1 = Timestamp::now(1);
         let ts2 = Timestamp::now(1);
-        
+
         assert!(ts2.time >= ts1.time);
     }
 
@@ -108,7 +102,7 @@ mod tests {
     fn test_token_creation() {
         let ts = Timestamp::new(1000, 1);
         let token = Token::new(ts, 0);
-        
+
         assert_eq!(token.timestamp, ts);
         assert_eq!(token.seq, 0);
     }

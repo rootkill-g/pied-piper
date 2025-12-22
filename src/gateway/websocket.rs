@@ -16,13 +16,13 @@ use crate::wasm::{ModuleLoader, WasmRuntime, WasmRuntimeConfig};
 pub struct WsMessage {
     /// Message type (e.g., "request", "response", "event", "ping", "pong")
     pub r#type: String,
-    
+
     /// Request ID for correlation
     pub id: Option<String>,
-    
+
     /// Payload data
     pub data: serde_json::Value,
-    
+
     /// Optional metadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
@@ -38,30 +38,22 @@ impl WsHandler {
     pub fn new(network: NetworkClient, loader: Arc<ModuleLoader>) -> Self {
         Self { network, loader }
     }
-    
+
     /// Handle WebSocket upgrade for CID-based modules
-    pub async fn handle_ws_cid(
-        self: Arc<Self>,
-        ws: WebSocketUpgrade,
-        cid: String,
-    ) -> Response {
+    pub async fn handle_ws_cid(self: Arc<Self>, ws: WebSocketUpgrade, cid: String) -> Response {
         info!("WebSocket upgrade requested for CID: {}", cid);
-        
+
         ws.on_upgrade(move |socket| async move {
             if let Err(e) = self.handle_socket(socket, cid).await {
                 error!("WebSocket error: {}", e);
             }
         })
     }
-    
+
     /// Handle WebSocket upgrade for named applications
-    pub async fn handle_ws_app(
-        self: Arc<Self>,
-        ws: WebSocketUpgrade,
-        name: String,
-    ) -> Response {
+    pub async fn handle_ws_app(self: Arc<Self>, ws: WebSocketUpgrade, name: String) -> Response {
         info!("WebSocket upgrade requested for app: {}", name);
-        
+
         // Resolve name to CID
         let cid = match self.resolve_name(&name).await {
             Ok(Some(cid)) => cid,
@@ -77,7 +69,7 @@ impl WsHandler {
                         }),
                         metadata: None,
                     };
-                    
+
                     if let Ok(json) = serde_json::to_string(&error_msg) {
                         let _ = socket.send(Message::Text(json)).await;
                     }
@@ -96,7 +88,7 @@ impl WsHandler {
                         }),
                         metadata: None,
                     };
-                    
+
                     if let Ok(json) = serde_json::to_string(&error_msg) {
                         let _ = socket.send(Message::Text(json)).await;
                     }
@@ -104,20 +96,20 @@ impl WsHandler {
                 });
             }
         };
-        
+
         ws.on_upgrade(move |socket| async move {
             if let Err(e) = self.handle_socket(socket, cid).await {
                 error!("WebSocket error: {}", e);
             }
         })
     }
-    
+
     /// Handle the WebSocket connection
     async fn handle_socket(&self, socket: WebSocket, cid: String) -> Result<()> {
         let (mut sender, mut receiver) = socket.split();
-        
+
         info!("WebSocket connection established for CID: {}", cid);
-        
+
         // Send welcome message
         let welcome = WsMessage {
             r#type: "connected".to_string(),
@@ -128,11 +120,11 @@ impl WsHandler {
             }),
             metadata: None,
         };
-        
+
         sender
             .send(Message::Text(serde_json::to_string(&welcome)?))
             .await?;
-        
+
         // Fetch module once
         let module_bytes = match self.fetch_module(&cid).await? {
             Some(bytes) => bytes,
@@ -146,21 +138,21 @@ impl WsHandler {
                     }),
                     metadata: None,
                 };
-                
+
                 sender
                     .send(Message::Text(serde_json::to_string(&error_msg)?))
                     .await?;
-                
+
                 return Ok(());
             }
         };
-        
+
         // Process messages
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
                     debug!("Received WebSocket text message: {} bytes", text.len());
-                    
+
                     match self.process_message(&text, &module_bytes).await {
                         Ok(response) => {
                             if let Err(e) = sender.send(Message::Text(response)).await {
@@ -170,7 +162,7 @@ impl WsHandler {
                         }
                         Err(e) => {
                             error!("Error processing message: {}", e);
-                            
+
                             let error_response = WsMessage {
                                 r#type: "error".to_string(),
                                 id: None,
@@ -180,7 +172,7 @@ impl WsHandler {
                                 }),
                                 metadata: None,
                             };
-                            
+
                             if let Ok(json) = serde_json::to_string(&error_response) {
                                 let _ = sender.send(Message::Text(json)).await;
                             }
@@ -189,13 +181,11 @@ impl WsHandler {
                 }
                 Ok(Message::Binary(data)) => {
                     debug!("Received WebSocket binary message: {} bytes", data.len());
-                    
+
                     // Convert binary to base64 and process
-                    let base64_data = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &data
-                    );
-                    
+                    let base64_data =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+
                     let ws_msg = WsMessage {
                         r#type: "binary".to_string(),
                         id: None,
@@ -205,9 +195,9 @@ impl WsHandler {
                         }),
                         metadata: None,
                     };
-                    
+
                     let text = serde_json::to_string(&ws_msg)?;
-                    
+
                     match self.process_message(&text, &module_bytes).await {
                         Ok(response) => {
                             let _ = sender.send(Message::Text(response)).await;
@@ -234,19 +224,19 @@ impl WsHandler {
                 }
             }
         }
-        
+
         info!("WebSocket connection closed for CID: {}", cid);
         Ok(())
     }
-    
+
     /// Process a WebSocket message through WASM
     async fn process_message(&self, message: &str, module_bytes: &[u8]) -> Result<String> {
         // Parse the incoming message
-        let ws_msg: WsMessage = serde_json::from_str(message)
-            .context("Invalid WebSocket message format")?;
-        
+        let ws_msg: WsMessage =
+            serde_json::from_str(message).context("Invalid WebSocket message format")?;
+
         debug!("Processing WebSocket message type: {}", ws_msg.r#type);
-        
+
         // Handle built-in message types
         match ws_msg.r#type.as_str() {
             "ping" => {
@@ -269,7 +259,7 @@ impl WsHandler {
             }
             _ => {}
         }
-        
+
         // Pass to WASM module for processing
         let config = WasmRuntimeConfig {
             max_memory_bytes: 64 * 1024 * 1024, // 64MB
@@ -279,9 +269,9 @@ impl WsHandler {
             enable_fuel: true,
             initial_fuel: 1_000_000,
         };
-        
+
         let runtime = WasmRuntime::new(config)?;
-        
+
         // Check if component or core module
         let is_component = module_bytes.len() >= 5
             && module_bytes[0] == 0x00
@@ -289,18 +279,20 @@ impl WsHandler {
             && module_bytes[2] == 0x73
             && module_bytes[3] == 0x6d
             && module_bytes[4] == 0x0d;
-        
+
         if is_component {
             let component = runtime.load_component(module_bytes)?;
             let message_json = serde_json::to_string(&ws_msg)?;
             let mut store = runtime.create_store_with_stdin(message_json.into_bytes())?;
-            
-            runtime.execute_component_command(&mut store, &component).await?;
-            
+
+            runtime
+                .execute_component_command(&mut store, &component)
+                .await?;
+
             let stdout_bytes = runtime.get_stdout(&store);
-            let response_str = String::from_utf8(stdout_bytes)
-                .context("Invalid UTF-8 in WASM output")?;
-            
+            let response_str =
+                String::from_utf8(stdout_bytes).context("Invalid UTF-8 in WASM output")?;
+
             // Try to parse as WsMessage, otherwise wrap it
             match serde_json::from_str::<WsMessage>(&response_str) {
                 Ok(msg) => Ok(serde_json::to_string(&msg)?),
@@ -320,16 +312,16 @@ impl WsHandler {
             let module = runtime.load_module(module_bytes)?;
             let message_json = serde_json::to_string(&ws_msg)?;
             let mut store = runtime.create_store_with_stdin(message_json.into_bytes())?;
-            
+
             let instance = runtime.instantiate_with_wasi(&mut store, &module).await?;
-            
+
             // Try to call a WebSocket handler function
             if let Some(func) = instance.get_func(&mut store, "handle_ws_message") {
                 func.call_async(&mut store, &[], &mut []).await?;
-                
+
                 let stdout_bytes = runtime.get_stdout(&store);
                 let response_str = String::from_utf8(stdout_bytes)?;
-                
+
                 Ok(response_str)
             } else {
                 // No handler function, return error
@@ -346,23 +338,23 @@ impl WsHandler {
             }
         }
     }
-    
+
     /// Resolve application name to CID
     async fn resolve_name(&self, name: &str) -> Result<Option<String>> {
         self.network.resolve_name(name).await
     }
-    
+
     /// Fetch module bytes from cache or network
     async fn fetch_module(&self, cid: &str) -> Result<Option<Vec<u8>>> {
         use crate::wasm::ModuleCid;
-        
+
         let module_cid = ModuleCid::new(cid.to_string());
-        
+
         // Try cache first
         if let Some((_info, bytes)) = self.loader.get_from_cache(&module_cid).await {
             return Ok(Some(bytes.to_vec()));
         }
-        
+
         // Try network
         if let Some(metadata) = self.network.find_module_by_cid(&module_cid).await? {
             for provider_str in metadata.providers {
@@ -373,7 +365,7 @@ impl WsHandler {
                 }
             }
         }
-        
+
         Ok(None)
     }
 }

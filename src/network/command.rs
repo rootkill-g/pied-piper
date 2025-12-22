@@ -31,7 +31,7 @@ pub enum NetworkCommand {
         peer_id: PeerId,
         response: oneshot::Sender<anyhow::Result<Option<Vec<u8>>>>,
     },
-    
+
     /// Register a persistent name for a module
     RegisterName {
         name: String,
@@ -39,19 +39,19 @@ pub enum NetworkCommand {
         version: Option<String>,
         response: oneshot::Sender<anyhow::Result<()>>,
     },
-    
+
     /// Resolve a persistent name to a CID
     ResolveName {
         name: String,
         response: oneshot::Sender<anyhow::Result<Option<String>>>,
     },
-    
+
     /// Find all versions of a module by name
     FindVersions {
         name: String,
         response: oneshot::Sender<anyhow::Result<Vec<ModuleMetadata>>>,
     },
-    
+
     /// Find best matching version for a requirement
     FindBestVersion {
         name: String,

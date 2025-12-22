@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Last-Write-Wins Map (LWW-Map)
-/// 
+///
 /// A CRDT that resolves conflicts using timestamps - the most recent write wins.
 /// Each key is associated with a value and a timestamp.
 /// During merge, the value with the highest timestamp is kept.
@@ -51,7 +51,9 @@ impl LwwMap {
 
     /// Get a value with its timestamp
     pub fn get_with_timestamp(&self, key: &str) -> Option<(&[u8], Timestamp)> {
-        self.entries.get(key).map(|(value, ts)| (value.as_slice(), *ts))
+        self.entries
+            .get(key)
+            .map(|(value, ts)| (value.as_slice(), *ts))
     }
 
     /// Remove a key with the current timestamp
@@ -120,14 +122,14 @@ mod tests {
     #[test]
     fn test_basic_operations() {
         let mut map = LwwMap::new(1);
-        
+
         map.set("key1".to_string(), b"value1".to_vec());
         assert_eq!(map.get("key1"), Some(b"value1".as_slice()));
         assert_eq!(map.len(), 1);
-        
+
         map.set("key2".to_string(), b"value2".to_vec());
         assert_eq!(map.len(), 2);
-        
+
         map.remove("key1");
         assert_eq!(map.get("key1"), None);
         assert_eq!(map.len(), 1);
@@ -136,18 +138,18 @@ mod tests {
     #[test]
     fn test_timestamp_conflicts() {
         let mut map = LwwMap::new(1);
-        
+
         let ts1 = Timestamp::new(1000, 1);
         let ts2 = Timestamp::new(2000, 1);
-        
+
         // Add with earlier timestamp
         map.set_with_timestamp("key".to_string(), b"old".to_vec(), ts1);
         assert_eq!(map.get("key"), Some(b"old".as_slice()));
-        
+
         // Add with later timestamp - should replace
         map.set_with_timestamp("key".to_string(), b"new".to_vec(), ts2);
         assert_eq!(map.get("key"), Some(b"new".as_slice()));
-        
+
         // Try to add with earlier timestamp - should be ignored
         map.set_with_timestamp("key".to_string(), b"older".to_vec(), ts1);
         assert_eq!(map.get("key"), Some(b"new".as_slice()));
@@ -157,20 +159,20 @@ mod tests {
     fn test_merge() {
         let mut map1 = LwwMap::new(1);
         let mut map2 = LwwMap::new(2);
-        
+
         let ts1 = Timestamp::new(1000, 1);
         let ts2 = Timestamp::new(2000, 2);
         let ts3 = Timestamp::new(1500, 1);
-        
+
         map1.set_with_timestamp("a".to_string(), b"value_a1".to_vec(), ts1);
         map1.set_with_timestamp("b".to_string(), b"value_b1".to_vec(), ts3);
-        
+
         map2.set_with_timestamp("a".to_string(), b"value_a2".to_vec(), ts2);
         map2.set_with_timestamp("c".to_string(), b"value_c2".to_vec(), ts2);
-        
+
         // Merge map2 into map1
         map1.merge(&map2);
-        
+
         // map1 should have:
         // - "a" -> "value_a2" (ts2 > ts1)
         // - "b" -> "value_b1" (only in map1)
@@ -185,20 +187,20 @@ mod tests {
     fn test_merge_bidirectional() {
         let mut map1 = LwwMap::new(1);
         let mut map2 = LwwMap::new(2);
-        
+
         let ts1 = Timestamp::new(1000, 1);
         let ts2 = Timestamp::new(2000, 2);
-        
+
         map1.set_with_timestamp("key".to_string(), b"value1".to_vec(), ts1);
         map2.set_with_timestamp("key".to_string(), b"value2".to_vec(), ts2);
-        
+
         // Merge both ways
         let mut merged1 = map1.clone();
         let mut merged2 = map2.clone();
-        
+
         merged1.merge(&map2);
         merged2.merge(&map1);
-        
+
         // Both should converge to the same state (ts2 wins)
         assert_eq!(merged1.get("key"), Some(b"value2".as_slice()));
         assert_eq!(merged2.get("key"), Some(b"value2".as_slice()));
@@ -209,13 +211,13 @@ mod tests {
         let mut map = LwwMap::new(1);
         map.set("key1".to_string(), b"value1".to_vec());
         map.set("key2".to_string(), b"value2".to_vec());
-        
+
         // Serialize
         let serialized = bincode::serialize(&map).unwrap();
-        
+
         // Deserialize
         let deserialized: LwwMap = bincode::deserialize(&serialized).unwrap();
-        
+
         assert_eq!(deserialized.get("key1"), Some(b"value1".as_slice()));
         assert_eq!(deserialized.get("key2"), Some(b"value2".as_slice()));
         assert_eq!(deserialized.len(), 2);

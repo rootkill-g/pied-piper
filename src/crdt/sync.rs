@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// CRDT synchronization manager
-/// 
+///
 /// Manages distributed state synchronization using GossipSub for propagation.
 /// Provides last-write-wins maps and observed-remove sets with automatic merging.
 pub struct CrdtSync {
@@ -86,15 +86,20 @@ impl CrdtSync {
     }
 
     /// Set a value in an LWW-Map and return the operation for broadcasting
-    pub async fn lww_map_set(&self, name: &str, key: String, value: Vec<u8>) -> Result<CrdtOperation> {
+    pub async fn lww_map_set(
+        &self,
+        name: &str,
+        key: String,
+        value: Vec<u8>,
+    ) -> Result<CrdtOperation> {
         let mut maps = self.lww_maps.write().await;
         let map = maps
             .entry(name.to_string())
             .or_insert_with(|| LwwMap::new(self.node_id));
-        
+
         let timestamp = Timestamp::now(self.node_id);
         map.set_with_timestamp(key.clone(), value.clone(), timestamp);
-        
+
         Ok(CrdtOperation::LwwMapSet {
             key,
             value,
@@ -108,10 +113,10 @@ impl CrdtSync {
         let map = maps
             .entry(name.to_string())
             .or_insert_with(|| LwwMap::new(self.node_id));
-        
+
         let timestamp = Timestamp::now(self.node_id);
         map.remove_with_timestamp(key, timestamp);
-        
+
         Ok(CrdtOperation::LwwMapRemove {
             key: key.to_string(),
             timestamp,
@@ -121,7 +126,8 @@ impl CrdtSync {
     /// Get a value from an LWW-Map
     pub async fn lww_map_get(&self, name: &str, key: &str) -> Option<Vec<u8>> {
         let maps = self.lww_maps.read().await;
-        maps.get(name).and_then(|map| map.get(key).map(|v| v.to_vec()))
+        maps.get(name)
+            .and_then(|map| map.get(key).map(|v| v.to_vec()))
     }
 
     /// Get all keys from an LWW-Map
@@ -144,9 +150,9 @@ impl CrdtSync {
         let set = sets
             .entry(name.to_string())
             .or_insert_with(|| OrSet::new(self.node_id));
-        
+
         let token = set.add(element.clone());
-        
+
         Ok(CrdtOperation::OrSetAdd {
             key: name.to_string(),
             value: element,
@@ -160,11 +166,11 @@ impl CrdtSync {
         let set = sets
             .entry(name.to_string())
             .or_insert_with(|| OrSet::new(self.node_id));
-        
+
         // Get the tokens for this element before removing
         let tokens = set.get_tokens(element).unwrap_or_default();
         set.remove(element);
-        
+
         Ok(CrdtOperation::OrSetRemove {
             key: name.to_string(),
             tokens: tokens.into_iter().collect(),
@@ -182,9 +188,7 @@ impl CrdtSync {
     /// Get all elements from an OR-Set
     pub async fn or_set_elements(&self, name: &str) -> Vec<Vec<u8>> {
         let sets = self.or_sets.read().await;
-        sets.get(name)
-            .map(|set| set.elements())
-            .unwrap_or_default()
+        sets.get(name).map(|set| set.elements()).unwrap_or_default()
     }
 
     /// Get the number of elements in an OR-Set
@@ -194,9 +198,21 @@ impl CrdtSync {
     }
 
     /// Apply a CRDT operation (received from network)
-    pub async fn apply_operation(&self, crdt_name: &str, crdt_type: CrdtType, operation: CrdtOperation) -> Result<()> {
+    pub async fn apply_operation(
+        &self,
+        crdt_name: &str,
+        crdt_type: CrdtType,
+        operation: CrdtOperation,
+    ) -> Result<()> {
         match (crdt_type, operation) {
-            (CrdtType::LwwMap, CrdtOperation::LwwMapSet { key, value, timestamp }) => {
+            (
+                CrdtType::LwwMap,
+                CrdtOperation::LwwMapSet {
+                    key,
+                    value,
+                    timestamp,
+                },
+            ) => {
                 let mut maps = self.lww_maps.write().await;
                 let map = maps
                     .entry(crdt_name.to_string())
@@ -229,7 +245,10 @@ impl CrdtSync {
                 }
             }
             _ => {
-                anyhow::bail!("CRDT type mismatch: {:?} does not match operation", crdt_type);
+                anyhow::bail!(
+                    "CRDT type mismatch: {:?} does not match operation",
+                    crdt_type
+                );
             }
         }
         Ok(())
@@ -238,22 +257,28 @@ impl CrdtSync {
     /// Handle incoming GossipSub message
     pub async fn handle_message(&self, message: &Message) -> Result<()> {
         let sync_msg: CrdtSyncMessage = bincode::deserialize(&message.data)?;
-        
+
         // Ignore messages from self
         if sync_msg.node_id == self.node_id {
             return Ok(());
         }
-        
+
         // Apply each operation
         for operation in sync_msg.operations {
-            self.apply_operation(&sync_msg.crdt_name, sync_msg.crdt_type, operation).await?;
+            self.apply_operation(&sync_msg.crdt_name, sync_msg.crdt_type, operation)
+                .await?;
         }
-        
+
         Ok(())
     }
 
     /// Create a sync message for broadcasting
-    pub fn create_sync_message(&self, crdt_name: String, crdt_type: CrdtType, operations: Vec<CrdtOperation>) -> CrdtSyncMessage {
+    pub fn create_sync_message(
+        &self,
+        crdt_name: String,
+        crdt_type: CrdtType,
+        operations: Vec<CrdtOperation>,
+    ) -> CrdtSyncMessage {
         CrdtSyncMessage {
             node_id: self.node_id,
             crdt_name,
@@ -275,19 +300,25 @@ mod tests {
     #[tokio::test]
     async fn test_lww_map_operations() {
         let sync = CrdtSync::new(1);
-        
+
         // Set a value
-        let _op = sync.lww_map_set("test_map", "key1".to_string(), b"value1".to_vec()).await.unwrap();
-        
+        let _op = sync
+            .lww_map_set("test_map", "key1".to_string(), b"value1".to_vec())
+            .await
+            .unwrap();
+
         // Get the value
         let value = sync.lww_map_get("test_map", "key1").await;
         assert_eq!(value, Some(b"value1".to_vec()));
-        
+
         // Update the value
-        let _op = sync.lww_map_set("test_map", "key1".to_string(), b"value2".to_vec()).await.unwrap();
+        let _op = sync
+            .lww_map_set("test_map", "key1".to_string(), b"value2".to_vec())
+            .await
+            .unwrap();
         let value = sync.lww_map_get("test_map", "key1").await;
         assert_eq!(value, Some(b"value2".to_vec()));
-        
+
         // Remove the value
         let _op = sync.lww_map_remove("test_map", "key1").await.unwrap();
         let value = sync.lww_map_get("test_map", "key1").await;
@@ -297,19 +328,25 @@ mod tests {
     #[tokio::test]
     async fn test_or_set_operations() {
         let sync = CrdtSync::new(1);
-        
+
         // Add elements
-        let _op = sync.or_set_add("test_set", b"elem1".to_vec()).await.unwrap();
-        let _op = sync.or_set_add("test_set", b"elem2".to_vec()).await.unwrap();
-        
+        let _op = sync
+            .or_set_add("test_set", b"elem1".to_vec())
+            .await
+            .unwrap();
+        let _op = sync
+            .or_set_add("test_set", b"elem2".to_vec())
+            .await
+            .unwrap();
+
         // Check containment
         assert!(sync.or_set_contains("test_set", b"elem1").await);
         assert!(sync.or_set_contains("test_set", b"elem2").await);
         assert!(!sync.or_set_contains("test_set", b"elem3").await);
-        
+
         // Check length
         assert_eq!(sync.or_set_len("test_set").await, 2);
-        
+
         // Remove element
         let _op = sync.or_set_remove("test_set", b"elem1").await.unwrap();
         assert!(!sync.or_set_contains("test_set", b"elem1").await);
@@ -320,13 +357,19 @@ mod tests {
     async fn test_lww_map_sync() {
         let sync1 = CrdtSync::new(1);
         let sync2 = CrdtSync::new(2);
-        
+
         // Node 1 sets a value
-        let op1 = sync1.lww_map_set("shared", "key".to_string(), b"value1".to_vec()).await.unwrap();
-        
+        let op1 = sync1
+            .lww_map_set("shared", "key".to_string(), b"value1".to_vec())
+            .await
+            .unwrap();
+
         // Node 2 applies the operation
-        sync2.apply_operation("shared", CrdtType::LwwMap, op1).await.unwrap();
-        
+        sync2
+            .apply_operation("shared", CrdtType::LwwMap, op1)
+            .await
+            .unwrap();
+
         // Both should have the same value
         let value1 = sync1.lww_map_get("shared", "key").await;
         let value2 = sync2.lww_map_get("shared", "key").await;
@@ -338,13 +381,16 @@ mod tests {
     async fn test_or_set_sync() {
         let sync1 = CrdtSync::new(1);
         let sync2 = CrdtSync::new(2);
-        
+
         // Node 1 adds an element
         let op1 = sync1.or_set_add("shared", b"elem".to_vec()).await.unwrap();
-        
+
         // Node 2 applies the operation
-        sync2.apply_operation("shared", CrdtType::OrSet, op1).await.unwrap();
-        
+        sync2
+            .apply_operation("shared", CrdtType::OrSet, op1)
+            .await
+            .unwrap();
+
         // Both should have the element
         assert!(sync1.or_set_contains("shared", b"elem").await);
         assert!(sync2.or_set_contains("shared", b"elem").await);

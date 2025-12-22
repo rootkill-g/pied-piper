@@ -51,14 +51,14 @@ impl TlsConfig {
 pub fn generate_self_signed_cert(domain: &str, cert_path: &Path, key_path: &Path) -> Result<()> {
     warn!("Generating self-signed certificate for development");
     warn!("Domain: {}", domain);
-    
+
     // For production use, we'd use rcgen crate, but for now just log instructions
     info!("To generate a self-signed certificate, run:");
     info!("  openssl req -x509 -newkey rsa:4096 -nodes \\");
     info!("    -keyout {:?} \\", key_path);
     info!("    -out {:?} \\", cert_path);
     info!("    -days 365 -subj '/CN={}'", domain);
-    
+
     anyhow::bail!(
         "Self-signed certificate generation not implemented. \
          Please use openssl to generate certificates manually."

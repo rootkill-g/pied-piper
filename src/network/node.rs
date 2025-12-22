@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
+use futures::future::join_all;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, futures::StreamExt, gossipsub, identify, kad, mdns,
     noise, ping, request_response, swarm::SwarmEvent, tcp, yamux,
 };
-use futures::future::join_all;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
 use tokio::fs;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use super::behaviour::{PiedPiperBehaviour, PiedPiperEvent};
@@ -148,9 +148,14 @@ impl NetworkClient {
 
         rx.await.context("Failed to receive FetchModule response")?
     }
-    
+
     /// Register a persistent name for a module
-    pub async fn register_name(&self, name: String, cid: ModuleCid, version: Option<String>) -> Result<()> {
+    pub async fn register_name(
+        &self,
+        name: String,
+        cid: ModuleCid,
+        version: Option<String>,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
 
         self.command_tx
@@ -163,9 +168,10 @@ impl NetworkClient {
             .await
             .context("Failed to send RegisterName command")?;
 
-        rx.await.context("Failed to receive RegisterName response")?
+        rx.await
+            .context("Failed to receive RegisterName response")?
     }
-    
+
     /// Resolve a persistent name to a CID
     pub async fn resolve_name(&self, name: &str) -> Result<Option<String>> {
         let (tx, rx) = oneshot::channel();
@@ -180,7 +186,7 @@ impl NetworkClient {
 
         rx.await.context("Failed to receive ResolveName response")?
     }
-    
+
     /// Find all available versions of a module by name
     pub async fn find_versions(&self, name: &str) -> Result<Vec<ModuleMetadata>> {
         let (tx, rx) = oneshot::channel();
@@ -193,12 +199,17 @@ impl NetworkClient {
             .await
             .context("Failed to send FindVersions command")?;
 
-        rx.await.context("Failed to receive FindVersions response")?
+        rx.await
+            .context("Failed to receive FindVersions response")?
     }
-    
+
     /// Find the best matching version for a requirement
     /// Requirement format: "^1.0.0", "~1.2.3", ">=2.0.0", "latest"
-    pub async fn find_best_version(&self, name: &str, requirement: &str) -> Result<Option<ModuleMetadata>> {
+    pub async fn find_best_version(
+        &self,
+        name: &str,
+        requirement: &str,
+    ) -> Result<Option<ModuleMetadata>> {
         let (tx, rx) = oneshot::channel();
 
         self.command_tx
@@ -210,7 +221,8 @@ impl NetworkClient {
             .await
             .context("Failed to send FindBestVersion command")?;
 
-        rx.await.context("Failed to receive FindBestVersion response")?
+        rx.await
+            .context("Failed to receive FindBestVersion response")?
     }
 }
 
@@ -422,7 +434,10 @@ impl NetworkNode {
                 debug!("Loaded {} peers from DHT persistence", peers.len());
                 for (peer_id, addresses) in peers {
                     for addr in addresses {
-                        self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr);
                     }
                 }
             }
@@ -538,8 +553,9 @@ impl NetworkNode {
                         .put_record(latest_record, kad::Quorum::One)?;
 
                     if let Some(version) = &info.version {
-                        let name_record =
-                            self.publisher.create_name_record(name, version, &info.cid)?;
+                        let name_record = self
+                            .publisher
+                            .create_name_record(name, version, &info.cid)?;
                         self.swarm
                             .behaviour_mut()
                             .kademlia
@@ -605,8 +621,7 @@ impl NetworkNode {
                         });
                     }
 
-                    let peers: Vec<PeerId> =
-                        self.swarm.connected_peers().cloned().collect();
+                    let peers: Vec<PeerId> = self.swarm.connected_peers().cloned().collect();
 
                     if peers.is_empty() {
                         let _ = response.send(Ok(local_metadata));
@@ -644,15 +659,11 @@ impl NetworkNode {
                         }
 
                         let wait_all = join_all(receivers);
-                        let response_sets = match tokio::time::timeout(
-                            Duration::from_secs(3),
-                            wait_all,
-                        )
-                        .await
-                        {
-                            Ok(responses) => responses,
-                            Err(_) => Vec::new(),
-                        };
+                        let response_sets =
+                            match tokio::time::timeout(Duration::from_secs(3), wait_all).await {
+                                Ok(responses) => responses,
+                                Err(_) => Vec::new(),
+                            };
 
                         for response in response_sets {
                             let response = match response {
@@ -708,32 +719,39 @@ impl NetworkNode {
                     Some(ClientResponder::Bytes(response)),
                 );
             }
-            
-            NetworkCommand::RegisterName { name, cid, version, response } => {
+
+            NetworkCommand::RegisterName {
+                name,
+                cid,
+                version,
+                response,
+            } => {
                 info!("Registering persistent name: {} -> {}", name, cid);
-                
+
                 // Create persistent name registration record
-                let record = self.publisher.register_persistent_name(&name, &cid, version)?;
-                
+                let record = self
+                    .publisher
+                    .register_persistent_name(&name, &cid, version)?;
+
                 // Store in DHT with Quorum::One (will be replicated)
                 self.swarm
                     .behaviour_mut()
                     .kademlia
                     .put_record(record, kad::Quorum::One)?;
-                
+
                 let _ = response.send(Ok(()));
             }
-            
+
             NetworkCommand::ResolveName { name, response } => {
                 info!("Resolving persistent name: {}", name);
-                
+
                 // Query DHT for persistent name
                 let key = ModuleDiscovery::persistent_name_key(&name);
                 let query_id = self.swarm.behaviour_mut().kademlia.get_record(key);
-                
+
                 // Create a one-shot channel for the result
                 let (tx, rx) = oneshot::channel();
-                
+
                 use crate::content::discovery::ClientResponder;
                 self.discovery.register_dht_query(
                     query_id,
@@ -743,7 +761,7 @@ impl NetworkNode {
                     },
                     Some(ClientResponder::Metadata(tx)),
                 );
-                
+
                 // Spawn task to convert ModuleMetadata response to CID string
                 tokio::spawn(async move {
                     match rx.await {
@@ -762,15 +780,15 @@ impl NetworkNode {
                     }
                 });
             }
-            
+
             NetworkCommand::FindVersions { name, response } => {
                 info!("Finding all versions for module: {}", name);
-                
+
                 // Search local provider first
                 let local_infos = self.provider.search_by_name(&name).await;
                 let local_peer = self.swarm.local_peer_id().to_string();
                 let mut results = Vec::new();
-                
+
                 for info in local_infos {
                     results.push(ModuleMetadata {
                         cid: info.cid.to_string(),
@@ -784,20 +802,24 @@ impl NetworkNode {
                         published_at: 0,
                     });
                 }
-                
+
                 // TODO: Query network peers for additional versions
                 // For now, return local results
                 let _ = response.send(Ok(results));
             }
-            
-            NetworkCommand::FindBestVersion { name, requirement, response } => {
+
+            NetworkCommand::FindBestVersion {
+                name,
+                requirement,
+                response,
+            } => {
                 info!("Finding best version for {}: {}", name, requirement);
-                
+
                 // Search local provider
                 let local_infos = self.provider.search_by_name(&name).await;
                 let local_peer = self.swarm.local_peer_id().to_string();
                 let mut modules = Vec::new();
-                
+
                 for info in local_infos {
                     modules.push(ModuleMetadata {
                         cid: info.cid.to_string(),
@@ -811,16 +833,14 @@ impl NetworkNode {
                         published_at: 0,
                     });
                 }
-                
+
                 // Handle "latest" special case
                 if requirement == "latest" {
                     use crate::wasm::loader::version::find_latest;
-                    
-                    let versions: Vec<String> = modules
-                        .iter()
-                        .filter_map(|m| m.version.clone())
-                        .collect();
-                    
+
+                    let versions: Vec<String> =
+                        modules.iter().filter_map(|m| m.version.clone()).collect();
+
                     if let Some(best_version) = find_latest(&versions) {
                         let best_module = modules
                             .into_iter()
@@ -832,12 +852,10 @@ impl NetworkNode {
                 } else {
                     // Use semver matching
                     use crate::wasm::loader::version::find_best_match;
-                    
-                    let versions: Vec<String> = modules
-                        .iter()
-                        .filter_map(|m| m.version.clone())
-                        .collect();
-                    
+
+                    let versions: Vec<String> =
+                        modules.iter().filter_map(|m| m.version.clone()).collect();
+
                     match find_best_match(&versions, &requirement) {
                         Ok(Some(best_version)) => {
                             let best_module = modules
@@ -967,26 +985,21 @@ impl NetworkNode {
                             crate::content::discovery::QueryType::ModuleName { .. },
                             kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))),
                             Some(ClientResponder::Search(tx)),
-                        ) => {
-                            match self.discovery.parse_cid(&record.record.value) {
-                                Ok(cid) => {
-                                    let module_cid = ModuleCid::new(cid.clone());
-                                    let key = ModuleDiscovery::metadata_key(&module_cid);
-                                    let query_id =
-                                        self.swarm.behaviour_mut().kademlia.get_record(key);
-                                    self.discovery.register_dht_query(
-                                        query_id,
-                                        crate::content::discovery::QueryType::ModuleMetadata {
-                                            cid,
-                                        },
-                                        Some(ClientResponder::Search(tx)),
-                                    );
-                                }
-                                Err(err) => {
-                                    let _ = tx.send(Err(err));
-                                }
+                        ) => match self.discovery.parse_cid(&record.record.value) {
+                            Ok(cid) => {
+                                let module_cid = ModuleCid::new(cid.clone());
+                                let key = ModuleDiscovery::metadata_key(&module_cid);
+                                let query_id = self.swarm.behaviour_mut().kademlia.get_record(key);
+                                self.discovery.register_dht_query(
+                                    query_id,
+                                    crate::content::discovery::QueryType::ModuleMetadata { cid },
+                                    Some(ClientResponder::Search(tx)),
+                                );
                             }
-                        }
+                            Err(err) => {
+                                let _ = tx.send(Err(err));
+                            }
+                        },
                         (
                             crate::content::discovery::QueryType::ModuleName { .. },
                             kad::QueryResult::GetRecord(Ok(
@@ -1143,17 +1156,13 @@ impl NetworkNode {
                                 let _ = tx.send(Err(anyhow::anyhow!("Remote error: {}", message)));
                             }
                             (
-                                crate::content::protocol::ModuleResponse::SearchResults {
-                                    modules,
-                                },
+                                crate::content::protocol::ModuleResponse::SearchResults { modules },
                                 Some(ClientResponder::SearchResults(tx)),
                             ) => {
-                                let _ = tx.send(Ok(
-                                    crate::content::discovery::SearchResponse {
-                                        peer_id: peer,
-                                        results: modules,
-                                    },
-                                ));
+                                let _ = tx.send(Ok(crate::content::discovery::SearchResponse {
+                                    peer_id: peer,
+                                    results: modules,
+                                }));
                             }
                             _ => {}
                         }
@@ -1185,7 +1194,7 @@ impl NetworkNode {
     /// Handle Circuit Relay events
     async fn handle_relay_event(&mut self, event: libp2p::relay::client::Event) -> Result<()> {
         use libp2p::relay::client::Event;
-        
+
         match event {
             Event::ReservationReqAccepted {
                 relay_peer_id,
@@ -1279,7 +1288,9 @@ impl NetworkNode {
             self.loader
                 .add_to_cache(&cid, info.clone(), bytes.clone())
                 .await;
-            self.provider.provide_module(info.clone(), bytes.clone()).await?;
+            self.provider
+                .provide_module(info.clone(), bytes.clone())
+                .await?;
 
             let record = self
                 .publisher
@@ -1307,8 +1318,9 @@ impl NetworkNode {
                     .put_record(latest_record, kad::Quorum::One)?;
 
                 if let Some(version) = &info.version {
-                    let name_record =
-                        self.publisher.create_name_record(name, version, &info.cid)?;
+                    let name_record = self
+                        .publisher
+                        .create_name_record(name, version, &info.cid)?;
                     self.swarm
                         .behaviour_mut()
                         .kademlia

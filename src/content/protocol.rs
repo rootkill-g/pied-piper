@@ -1,6 +1,6 @@
 use libp2p::{
-    request_response::{self, ProtocolSupport},
     StreamProtocol,
+    request_response::{self, ProtocolSupport},
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,13 +12,13 @@ pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/pied-piper/modul
 pub enum ModuleRequest {
     /// Request module bytes by CID
     GetModule { cid: String },
-    
+
     /// Request module metadata by CID
     GetModuleInfo { cid: String },
-    
+
     /// Search for modules by name
     SearchByName { name: String },
-    
+
     /// List all modules a peer provides
     ListModules,
 }
@@ -27,11 +27,8 @@ pub enum ModuleRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ModuleResponse {
     /// Module bytes
-    Module {
-        cid: String,
-        bytes: Vec<u8>,
-    },
-    
+    Module { cid: String, bytes: Vec<u8> },
+
     /// Module metadata
     ModuleInfo {
         cid: String,
@@ -42,20 +39,16 @@ pub enum ModuleResponse {
         author: Option<String>,
         description: Option<String>,
     },
-    
+
     /// Search results
-    SearchResults {
-        modules: Vec<SearchResult>,
-    },
-    
+    SearchResults { modules: Vec<SearchResult> },
+
     /// List of available modules
-    ModuleList {
-        cids: Vec<String>,
-    },
-    
+    ModuleList { cids: Vec<String> },
+
     /// Module not found
     NotFound { cid: String },
-    
+
     /// Error occurred
     Error { message: String },
 }

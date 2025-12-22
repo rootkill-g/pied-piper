@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{ws::WebSocketUpgrade, Path, State},
+    extract::{Path, State, ws::WebSocketUpgrade},
     routing::{any, get},
 };
 use std::net::SocketAddr;
@@ -107,13 +107,13 @@ impl GatewayServer {
         // Start HTTPS server if TLS is configured
         let https_handle = if let Some(tls_config) = &self.config.tls_config {
             let https_port = self.config.https_port.unwrap_or(8443);
-            
+
             info!("🔒 TLS/HTTPS enabled");
             tls_config.validate()?;
-            
+
             let rustls_config = tls_config.build_server_config().await?;
             let app = app.clone();
-            
+
             Some(tokio::spawn(async move {
                 info!("🔐 Starting HTTPS Gateway on port {}", https_port);
                 let addr = SocketAddr::from(([0, 0, 0, 0], https_port));
@@ -156,10 +156,7 @@ impl GatewayServer {
                 self.loader.clone(),
                 self.config.clone(),
             )),
-            ws_handler: Arc::new(WsHandler::new(
-                self.network.clone(),
-                self.loader.clone(),
-            )),
+            ws_handler: Arc::new(WsHandler::new(self.network.clone(), self.loader.clone())),
         })
     }
 }
@@ -195,7 +192,14 @@ async fn handle_cid_request(
 
     state
         .handler
-        .handle_cid_request(cid_normalized, None, method.as_str(), query_str, &headers, &body)
+        .handle_cid_request(
+            cid_normalized,
+            None,
+            method.as_str(),
+            query_str,
+            &headers,
+            &body,
+        )
         .await
 }
 
@@ -213,7 +217,14 @@ async fn handle_cid_request_with_path(
 
     state
         .handler
-        .handle_cid_request(cid_normalized, Some(&path), method.as_str(), query_str, &headers, &body)
+        .handle_cid_request(
+            cid_normalized,
+            Some(&path),
+            method.as_str(),
+            query_str,
+            &headers,
+            &body,
+        )
         .await
 }
 
@@ -231,7 +242,14 @@ async fn handle_app_request(
 
     state
         .handler
-        .handle_app_request(name_normalized, None, method.as_str(), query_str, &headers, &body)
+        .handle_app_request(
+            name_normalized,
+            None,
+            method.as_str(),
+            query_str,
+            &headers,
+            &body,
+        )
         .await
 }
 
@@ -249,7 +267,14 @@ async fn handle_app_request_with_path(
 
     state
         .handler
-        .handle_app_request(name_normalized, Some(&path), method.as_str(), query_str, &headers, &body)
+        .handle_app_request(
+            name_normalized,
+            Some(&path),
+            method.as_str(),
+            query_str,
+            &headers,
+            &body,
+        )
         .await
 }
 

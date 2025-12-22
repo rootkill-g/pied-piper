@@ -7,16 +7,16 @@ use std::time::{Duration, Instant};
 pub struct ResourceLimits {
     /// Maximum memory in bytes
     pub max_memory_bytes: usize,
-    
+
     /// Maximum execution time
     pub max_execution_time: Duration,
-    
+
     /// Maximum fuel (instruction count)
     pub max_fuel: u64,
-    
+
     /// Maximum stack depth
     pub max_stack_depth: usize,
-    
+
     /// Maximum number of table elements
     pub max_table_elements: u64,
 }
@@ -44,7 +44,7 @@ impl ResourceLimits {
             max_table_elements: 1_000,
         }
     }
-    
+
     /// Create permissive limits (for trusted code)
     pub fn permissive() -> Self {
         Self {
@@ -61,10 +61,10 @@ impl ResourceLimits {
 pub struct ExecutionContext {
     /// Resource limits
     pub limits: ResourceLimits,
-    
+
     /// Start time of execution
     start_time: Instant,
-    
+
     /// Initial fuel amount
     initial_fuel: u64,
 }
@@ -78,17 +78,17 @@ impl ExecutionContext {
             start_time: Instant::now(),
         }
     }
-    
+
     /// Check if execution time limit is exceeded
     pub fn is_time_exceeded(&self) -> bool {
         self.start_time.elapsed() > self.limits.max_execution_time
     }
-    
+
     /// Get elapsed time
     pub fn elapsed_time(&self) -> Duration {
         self.start_time.elapsed()
     }
-    
+
     /// Calculate fuel consumed
     pub fn fuel_consumed(&self, remaining_fuel: u64) -> u64 {
         self.initial_fuel.saturating_sub(remaining_fuel)
@@ -100,13 +100,13 @@ impl ExecutionContext {
 pub struct ExecutionResult {
     /// Whether execution succeeded
     pub success: bool,
-    
+
     /// Return value (if any)
     pub return_value: Option<ExecutionValue>,
-    
+
     /// Error message (if failed)
     pub error: Option<String>,
-    
+
     /// Execution statistics
     pub stats: ExecutionStats,
 }
@@ -116,13 +116,13 @@ pub struct ExecutionResult {
 pub struct ExecutionStats {
     /// Time taken
     pub duration: Duration,
-    
+
     /// Memory used (peak)
     pub memory_used: usize,
-    
+
     /// Fuel consumed (instructions executed)
     pub fuel_consumed: u64,
-    
+
     /// Whether any limits were hit
     pub limits_hit: Vec<String>,
 }
@@ -180,27 +180,27 @@ impl Sandbox {
     pub fn new(limits: ResourceLimits) -> Self {
         Self { limits }
     }
-    
+
     /// Create a sandbox with default limits
     pub fn with_defaults() -> Self {
         Self::new(ResourceLimits::default())
     }
-    
+
     /// Create a conservative sandbox for untrusted code
     pub fn conservative() -> Self {
         Self::new(ResourceLimits::conservative())
     }
-    
+
     /// Create a permissive sandbox for trusted code
     pub fn permissive() -> Self {
         Self::new(ResourceLimits::permissive())
     }
-    
+
     /// Get the resource limits
     pub fn limits(&self) -> &ResourceLimits {
         &self.limits
     }
-    
+
     /// Validate that a module doesn't exceed resource requirements
     pub fn validate_module(&self, module: &wasmtime::Module) -> Result<()> {
         // Check memory limits
@@ -213,7 +213,7 @@ impl Sandbox {
         }) {
             let min_pages = memory_type.minimum();
             let min_bytes = min_pages as usize * 65536; // 64KB per page
-            
+
             if min_bytes > self.limits.max_memory_bytes {
                 anyhow::bail!(
                     "Module requires {} bytes of memory, but limit is {}",
@@ -222,7 +222,7 @@ impl Sandbox {
                 );
             }
         }
-        
+
         // Check table limits
         for table_type in module.exports().filter_map(|e| {
             if let wasmtime::ExternType::Table(t) = e.ty() {
@@ -232,7 +232,7 @@ impl Sandbox {
             }
         }) {
             let min_elements = table_type.minimum();
-            
+
             if min_elements > self.limits.max_table_elements {
                 anyhow::bail!(
                     "Module requires {} table elements, but limit is {}",
@@ -241,7 +241,7 @@ impl Sandbox {
                 );
             }
         }
-        
+
         Ok(())
     }
 }
@@ -249,33 +249,33 @@ impl Sandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_resource_limits_default() {
         let limits = ResourceLimits::default();
         assert_eq!(limits.max_memory_bytes, 128 * 1024 * 1024);
         assert_eq!(limits.max_execution_time, Duration::from_secs(30));
     }
-    
+
     #[test]
     fn test_resource_limits_conservative() {
         let limits = ResourceLimits::conservative();
         assert_eq!(limits.max_memory_bytes, 16 * 1024 * 1024);
         assert_eq!(limits.max_execution_time, Duration::from_secs(5));
     }
-    
+
     #[test]
     fn test_execution_context() {
         let limits = ResourceLimits::default();
         let ctx = ExecutionContext::new(limits);
         assert!(!ctx.is_time_exceeded());
     }
-    
+
     #[test]
     fn test_sandbox_creation() {
         let sandbox = Sandbox::with_defaults();
         assert_eq!(sandbox.limits().max_memory_bytes, 128 * 1024 * 1024);
-        
+
         let conservative = Sandbox::conservative();
         assert_eq!(conservative.limits().max_memory_bytes, 16 * 1024 * 1024);
     }

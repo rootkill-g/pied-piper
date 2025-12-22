@@ -10,11 +10,11 @@
 
 mod behaviour;
 mod command;
+mod kademlia_persistence;
 mod node;
 mod transport;
-mod kademlia_persistence;
 
 pub use behaviour::PiedPiperBehaviour;
 pub use command::NetworkCommand;
-pub use node::{NetworkClient, NetworkNode, NetworkNodeConfig};
 pub use kademlia_persistence::KademliaPersistence;
+pub use node::{NetworkClient, NetworkNode, NetworkNodeConfig};

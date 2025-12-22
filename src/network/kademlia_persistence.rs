@@ -42,7 +42,11 @@ impl KademliaPersistence {
     }
 
     /// Save the current DHT routing table state
-    pub async fn save(&self, local_peer_id: PeerId, peers: Vec<(PeerId, Vec<libp2p::Multiaddr>)>) -> Result<()> {
+    pub async fn save(
+        &self,
+        local_peer_id: PeerId,
+        peers: Vec<(PeerId, Vec<libp2p::Multiaddr>)>,
+    ) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
@@ -67,13 +71,20 @@ impl KademliaPersistence {
 
         let json = serde_json::to_string_pretty(&state)?;
         fs::write(&self.db_path, json).await?;
-        debug!("Persisted DHT state with {} peers to {:?}", state.peers.len(), self.db_path);
+        debug!(
+            "Persisted DHT state with {} peers to {:?}",
+            state.peers.len(),
+            self.db_path
+        );
 
         Ok(())
     }
 
     /// Load persisted DHT state
-    pub async fn load(&self, local_peer_id: PeerId) -> Result<Vec<(PeerId, Vec<libp2p::Multiaddr>)>> {
+    pub async fn load(
+        &self,
+        local_peer_id: PeerId,
+    ) -> Result<Vec<(PeerId, Vec<libp2p::Multiaddr>)>> {
         if !self.db_path.exists() {
             debug!("No persisted DHT state found at {:?}", self.db_path);
             return Ok(vec![]);
@@ -107,7 +118,10 @@ impl KademliaPersistence {
                             result.push((peer_id, addrs));
                         }
                         Err(e) => {
-                            warn!("Failed to parse multiaddr for peer {}: {}", persisted_peer.peer_id, e);
+                            warn!(
+                                "Failed to parse multiaddr for peer {}: {}",
+                                persisted_peer.peer_id, e
+                            );
                         }
                     }
                 }

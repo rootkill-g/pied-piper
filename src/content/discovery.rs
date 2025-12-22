@@ -34,7 +34,10 @@ pub enum QueryType {
     ModuleMetadata { cid: String },
 
     /// Looking up CID by name:version
-    ModuleName { name: String, version: Option<String> },
+    ModuleName {
+        name: String,
+        version: Option<String>,
+    },
 
     /// Searching modules by name via request-response
     SearchByName { name: String },
@@ -74,7 +77,7 @@ impl ModuleDiscovery {
     pub fn name_key_latest(name: &str) -> RecordKey {
         RecordKey::new(&format!("name:{}", name))
     }
-    
+
     /// Create a DHT key for persistent name lookup
     pub fn persistent_name_key(name: &str) -> RecordKey {
         RecordKey::new(&format!("persistent-name:{}", name))
@@ -149,7 +152,7 @@ impl ModuleDiscovery {
     pub fn parse_cid(&self, data: &[u8]) -> Result<String> {
         String::from_utf8(data.to_vec()).context("Failed to parse CID from name record")
     }
-    
+
     /// Parse persistent name registration
     pub fn parse_name_registration(&self, data: &[u8]) -> Result<NameRegistration> {
         serde_json::from_slice(data).context("Failed to parse name registration")

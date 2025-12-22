@@ -1,10 +1,9 @@
 /// Router for mapping URLs to content
-/// 
+///
 /// This module handles:
 /// - Route pattern matching
 /// - Path parameter extraction
 /// - Query string parsing
-
 use std::collections::HashMap;
 
 /// URL Router for content and API endpoints
@@ -37,26 +36,26 @@ impl Router {
             routes: HashMap::new(),
         }
     }
-    
+
     /// Register a route handler
     pub fn route(&mut self, pattern: &str, handler: RouteHandler) {
         self.routes.insert(pattern.to_string(), handler);
     }
-    
+
     /// Match a path to a route handler
     pub fn match_route(&self, path: &str) -> Option<&RouteHandler> {
         // Simple exact match for now
         // TODO: Implement pattern matching with wildcards
         self.routes.get(path)
     }
-    
+
     /// Parse path parameters
     pub fn parse_params(pattern: &str, path: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        
+
         let pattern_parts: Vec<&str> = pattern.split('/').collect();
         let path_parts: Vec<&str> = path.split('/').collect();
-        
+
         for (i, part) in pattern_parts.iter().enumerate() {
             if part.starts_with(':') {
                 if let Some(value) = path_parts.get(i) {
@@ -65,14 +64,14 @@ impl Router {
                 }
             }
         }
-        
+
         params
     }
-    
+
     /// Parse query string
     pub fn parse_query(query: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        
+
         for pair in query.split('&') {
             if let Some((key, value)) = pair.split_once('=') {
                 params.insert(
@@ -81,7 +80,7 @@ impl Router {
                 );
             }
         }
-        
+
         params
     }
 }

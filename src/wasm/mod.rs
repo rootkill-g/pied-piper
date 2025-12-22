@@ -7,12 +7,12 @@
 //! - Host function bindings
 //! - Sandboxed execution environment
 
-mod runtime;
-pub mod loader; // Make loader public for content module
-mod sandbox;
 mod host;
+pub mod loader; // Make loader public for content module
+mod runtime;
+mod sandbox;
 
-pub use runtime::{WasmRuntime, WasmRuntimeConfig};
-pub use loader::{ModuleLoader, ModuleInfo, ModuleCid};
-pub use sandbox::{ResourceLimits, ExecutionContext, ExecutionResult, Sandbox};
 pub use host::HostFunctions;
+pub use loader::{ModuleCid, ModuleInfo, ModuleLoader};
+pub use runtime::{WasmRuntime, WasmRuntimeConfig};
+pub use sandbox::{ExecutionContext, ExecutionResult, ResourceLimits, Sandbox};

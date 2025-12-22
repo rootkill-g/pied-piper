@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -71,8 +71,8 @@ impl ValidatedManifest {
     /// Parse and validate a manifest from YAML content
     pub fn from_yaml(content: &str, base_dir: impl AsRef<Path>) -> Result<Self> {
         let base_dir = base_dir.as_ref();
-        let manifest: Manifest = serde_yaml::from_str(content)
-            .context("Failed to parse manifest YAML")?;
+        let manifest: Manifest =
+            serde_yaml::from_str(content).context("Failed to parse manifest YAML")?;
 
         // Validate required fields
         manifest.validate()?;
@@ -80,10 +80,7 @@ impl ValidatedManifest {
         // Validate module path exists
         let module_path = base_dir.join(&manifest.module);
         if !module_path.exists() {
-            return Err(anyhow!(
-                "Module not found at {:?}",
-                module_path
-            ));
+            return Err(anyhow!("Module not found at {:?}", module_path));
         }
 
         Ok(Self {
@@ -143,7 +140,9 @@ impl Manifest {
     fn validate(&self) -> Result<()> {
         // Validate name
         if self.name.is_empty() {
-            return Err(anyhow!("Manifest field 'name' is required and cannot be empty"));
+            return Err(anyhow!(
+                "Manifest field 'name' is required and cannot be empty"
+            ));
         }
         if !Self::is_valid_identifier(&self.name) {
             return Err(anyhow!(
@@ -168,7 +167,9 @@ impl Manifest {
             return Err(anyhow!("Manifest field 'module' is required"));
         }
         if self.module.contains("..") {
-            return Err(anyhow!("Module path cannot contain '..' for security reasons"));
+            return Err(anyhow!(
+                "Module path cannot contain '..' for security reasons"
+            ));
         }
 
         // Validate dependencies for cycles
@@ -194,7 +195,10 @@ impl Manifest {
             }
             if let Some(max_mem) = runtime.max_memory {
                 if max_mem < 1024 * 1024 {
-                    warn!("Max memory too small ({}), minimum 1MB recommended", max_mem);
+                    warn!(
+                        "Max memory too small ({}), minimum 1MB recommended",
+                        max_mem
+                    );
                 }
             }
         }
@@ -238,7 +242,8 @@ impl Manifest {
     /// Check if string is a valid identifier (name, module, etc.)
     fn is_valid_identifier(s: &str) -> bool {
         !s.is_empty()
-            && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
             && !s.starts_with('-')
             && !s.starts_with('_')
     }

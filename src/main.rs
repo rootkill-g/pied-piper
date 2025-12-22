@@ -90,8 +90,8 @@ async fn main() -> Result<()> {
             let (module_path, manifest_meta) = if is_manifest_path(&manifest) {
                 let content = std::fs::read_to_string(&manifest)
                     .with_context(|| format!("Failed to read manifest: {:?}", manifest))?;
-                let parsed: AppManifest = serde_yaml::from_str(&content)
-                    .context("Failed to parse manifest YAML")?;
+                let parsed: AppManifest =
+                    serde_yaml::from_str(&content).context("Failed to parse manifest YAML")?;
                 let module_path = resolve_manifest_module(&manifest, &parsed)?;
                 (module_path, Some(parsed))
             } else {
@@ -104,7 +104,9 @@ async fn main() -> Result<()> {
             let meta_description = manifest_meta.as_ref().and_then(|m| m.description.clone());
 
             let name = name.or(meta_name).unwrap_or_else(|| "unnamed".to_string());
-            let version = version.or(meta_version).unwrap_or_else(|| "0.1.0".to_string());
+            let version = version
+                .or(meta_version)
+                .unwrap_or_else(|| "0.1.0".to_string());
             let author = author.or(meta_author);
             let description = description.or(meta_description);
 
@@ -118,11 +120,13 @@ async fn main() -> Result<()> {
                     version.clone(),
                 )
                 .await?;
-                
-                info!("Bundle created: {} assets, {} total bytes", 
-                    bundle.assets.len(), 
-                    bundle.metadata().total_size);
-                
+
+                info!(
+                    "Bundle created: {} assets, {} total bytes",
+                    bundle.assets.len(),
+                    bundle.metadata().total_size
+                );
+
                 bundle.to_bytes()?
             } else {
                 // Just deploy WASM module
@@ -264,7 +268,7 @@ async fn main() -> Result<()> {
                 .parse()
                 .context("Invalid listen address, expected host:port")?;
             let port = addr.port();
-            
+
             // Parse HTTPS address if TLS is enabled
             let https_port = if tls {
                 let https_addr: SocketAddr = https_listen
@@ -274,18 +278,16 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
-            
+
             // Setup TLS configuration if enabled
             let tls_config = if tls {
                 use crate::gateway::{TlsConfig, ensure_cert_dir};
-                
+
                 let cert_dir = ensure_cert_dir()?;
-                
-                let cert_path = tls_cert
-                    .unwrap_or_else(|| cert_dir.join("cert.pem"));
-                let key_path = tls_key
-                    .unwrap_or_else(|| cert_dir.join("key.pem"));
-                
+
+                let cert_path = tls_cert.unwrap_or_else(|| cert_dir.join("cert.pem"));
+                let key_path = tls_key.unwrap_or_else(|| cert_dir.join("key.pem"));
+
                 if !cert_path.exists() || !key_path.exists() {
                     error!("TLS certificate or key not found!");
                     error!("Expected: {:?} and {:?}", cert_path, key_path);
@@ -299,12 +301,12 @@ async fn main() -> Result<()> {
                     error!("");
                     anyhow::bail!("TLS files not found");
                 }
-                
+
                 Some(TlsConfig::new(cert_path, key_path))
             } else {
                 None
             };
-            
+
             let config = NetworkNodeConfig {
                 tcp_port,
                 quic_port,
