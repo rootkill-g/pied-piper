@@ -350,6 +350,7 @@ async fn handle_cid_request(
     State(state): State<Arc<GatewayState>>,
     method: axum::http::Method,
     headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
     axum::extract::Path(cid): axum::extract::Path<String>,
     query: axum::extract::RawQuery,
     body: axum::body::Bytes,
@@ -357,6 +358,65 @@ async fn handle_cid_request(
     let query_str = query.0.as_deref();
     let cid_normalized = cid.trim_end_matches('/');
     debug!("CID request: {} method: {}", cid_normalized, method);
+
+    // Validate CID format
+    if let Err(e) = crate::gateway::CIDValidator::validate(cid_normalized) {
+        warn!("Invalid CID: {} - {}", cid_normalized, e.message());
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
+
+    // Validate HTTP method
+    if let Err(e) = crate::gateway::MethodValidator::validate_cid_route(&method, false) {
+        warn!("Invalid method for CID route: {} - {}", method, e.message());
+        let allowed_methods = crate::gateway::MethodValidator::allowed_methods_cid(false);
+        let allow_header = allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .header("Allow", allow_header)
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
+
+    // Check if the URI has a trailing slash
+    let original_path = uri.path();
+    let has_trailing_slash = original_path.ends_with('/');
+
+    // If no trailing slash and it's a GET request, we may need to redirect for bundles
+    // First, check if this is a bundle by peeking at the module
+    if !has_trailing_slash && method == axum::http::Method::GET {
+        // Try to fetch the module to check if it's a bundle
+        if let Ok(Some(bytes)) = state.handler.fetch_module(cid_normalized).await {
+            // Check if it's NOT a WASM module (bundles need trailing slash for relative paths)
+            let is_wasm = bytes.len() >= 5
+                && bytes[0] == 0x00
+                && bytes[1] == 0x61
+                && bytes[2] == 0x73
+                && bytes[3] == 0x6d
+                && (bytes[4] == 0x0d || bytes[4] == 0x01);
+            
+            // If it's a bundle (not WASM), redirect to add trailing slash
+            if !is_wasm {
+                let redirect_url = if let Some(q) = query_str {
+                    format!("{}/?{}", original_path, q)
+                } else {
+                    format!("{}/", original_path)
+                };
+                debug!("Redirecting bundle to: {}", redirect_url);
+                return axum::response::Response::builder()
+                    .status(axum::http::StatusCode::MOVED_PERMANENTLY)
+                    .header(axum::http::header::LOCATION, redirect_url)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+            }
+        }
+    }
 
     state
         .handler
@@ -383,11 +443,63 @@ async fn handle_cid_request_with_path(
     let cid_normalized = cid.trim_end_matches('/');
     debug!("CID request: {} path: {}", cid_normalized, path);
 
+    // Validate CID format
+    if let Err(e) = crate::gateway::CIDValidator::validate(cid_normalized) {
+        warn!("Invalid CID: {} - {}", cid_normalized, e.message());
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
+
+    // Validate and normalize path
+    let path_normalized = match crate::gateway::PathSanitizer::normalize(&path) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("Invalid path: {} - {}", path, e.message());
+            return axum::response::Response::builder()
+                .status(e.status_code())
+                .body(axum::body::Body::from(e.message()))
+                .unwrap();
+        }
+    };
+
+    // Check for suspicious file extensions
+    if crate::gateway::ExtensionValidator::is_suspicious(&path_normalized) {
+        warn!("Suspicious file extension in path: {}", path_normalized);
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::FORBIDDEN)
+            .body(axum::body::Body::from(
+                "File type not allowed for security reasons",
+            ))
+            .unwrap();
+    }
+
+    // Validate HTTP method
+    if let Err(e) = crate::gateway::MethodValidator::validate_cid_route(&method, true) {
+        warn!(
+            "Invalid method for CID path route: {} - {}",
+            method,
+            e.message()
+        );
+        let allowed_methods = crate::gateway::MethodValidator::allowed_methods_cid(true);
+        let allow_header = allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .header("Allow", allow_header)
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
+
     state
         .handler
         .handle_cid_request(
             cid_normalized,
-            Some(&path),
+            Some(&path_normalized),
             method.as_str(),
             query_str,
             &headers,
@@ -407,6 +519,36 @@ async fn handle_app_request(
     let query_str = query.0.as_deref();
     let name_normalized = name.trim_end_matches('/');
     debug!("App request: {} method: {}", name_normalized, method);
+
+    // Validate app name (should be alphanumeric with hyphens/underscores)
+    if !name_normalized
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        warn!("Invalid app name: {}", name_normalized);
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::BAD_REQUEST)
+            .body(axum::body::Body::from(
+                "Invalid app name: must be alphanumeric with hyphens/underscores",
+            ))
+            .unwrap();
+    }
+
+    // Validate HTTP method for app routes
+    if let Err(e) = crate::gateway::MethodValidator::validate_app_route(&method) {
+        warn!("Invalid method for app route: {} - {}", method, e.message());
+        let allowed_methods = crate::gateway::MethodValidator::allowed_methods_app();
+        let allow_header = allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .header("Allow", allow_header)
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
 
     state
         .handler
@@ -433,11 +575,64 @@ async fn handle_app_request_with_path(
     let name_normalized = name.trim_end_matches('/');
     debug!("App request: {} path: {}", name_normalized, path);
 
+    // Validate app name
+    if !name_normalized
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        warn!("Invalid app name: {}", name_normalized);
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::BAD_REQUEST)
+            .body(axum::body::Body::from(
+                "Invalid app name: must be alphanumeric with hyphens/underscores",
+            ))
+            .unwrap();
+    }
+
+    // Validate and normalize path
+    let path_normalized = match crate::gateway::PathSanitizer::normalize(&path) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("Invalid path: {} - {}", path, e.message());
+            return axum::response::Response::builder()
+                .status(e.status_code())
+                .body(axum::body::Body::from(e.message()))
+                .unwrap();
+        }
+    };
+
+    // Check for suspicious file extensions
+    if crate::gateway::ExtensionValidator::is_suspicious(&path_normalized) {
+        warn!("Suspicious file extension in path: {}", path_normalized);
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::FORBIDDEN)
+            .body(axum::body::Body::from(
+                "File type not allowed for security reasons",
+            ))
+            .unwrap();
+    }
+
+    // Validate HTTP method for app routes
+    if let Err(e) = crate::gateway::MethodValidator::validate_app_route(&method) {
+        warn!("Invalid method for app route: {} - {}", method, e.message());
+        let allowed_methods = crate::gateway::MethodValidator::allowed_methods_app();
+        let allow_header = allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return axum::response::Response::builder()
+            .status(e.status_code())
+            .header("Allow", allow_header)
+            .body(axum::body::Body::from(e.message()))
+            .unwrap();
+    }
+
     state
         .handler
         .handle_app_request(
             name_normalized,
-            Some(&path),
+            Some(&path_normalized),
             method.as_str(),
             query_str,
             &headers,

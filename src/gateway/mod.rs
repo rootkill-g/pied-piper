@@ -2,6 +2,7 @@ pub mod handler;
 pub mod io;
 pub mod resolver;
 pub mod router;
+pub mod routing;
 /// HTTP Gateway for serving WebAssembly applications
 ///
 /// This module provides an HTTP server that bridges traditional web browsers
@@ -18,6 +19,7 @@ pub use handler::{RequestHandler, WasmHandler};
 pub use io::{WasmRequest, WasmResponse};
 pub use resolver::ContentResolver;
 pub use router::Router;
+pub use routing::{CIDValidator, PathSanitizer, MethodValidator, ExtensionValidator, RoutingError};
 pub use server::{GatewayConfig, GatewayServer};
 pub use tls::{TlsConfig, default_cert_dir, ensure_cert_dir};
 pub use websocket::WsHandler;

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -26,7 +27,8 @@ struct UpdateTodo {
 struct Request {
     method: String,
     path: String,
-    query: Option<String>,
+    #[serde(default)]
+    query: HashMap<String, String>,
     body: Option<String>,
 }
 
@@ -34,43 +36,45 @@ struct Request {
 struct Response {
     status: u16,
     body: String,
-    headers: Vec<(String, String)>,
+    headers: HashMap<String, String>,
 }
 
 // Storage helpers using extern functions
 mod storage {
     use super::*;
 
-    #[link(wasm_import_module = "host")]
+    #[link(wasm_import_module = "env")]
     extern "C" {
-        fn storage_get_v2(key_ptr: *const u8, key_len: usize) -> i32;
-        fn storage_set_v2(
+        fn host_storage_get(key_ptr: *const u8, key_len: usize, val_ptr: *mut u8, val_len_ptr: *mut usize) -> i32;
+        fn host_storage_set(
             key_ptr: *const u8,
             key_len: usize,
             value_ptr: *const u8,
             value_len: usize,
         ) -> i32;
-        fn storage_delete_v2(key_ptr: *const u8, key_len: usize) -> i32;
-        fn host_get_result(ptr: *mut u8, len: usize) -> usize;
+        fn host_storage_delete(key_ptr: *const u8, key_len: usize) -> i32;
     }
 
     pub fn get(key: &str) -> Option<String> {
         unsafe {
-            let ret = storage_get_v2(key.as_ptr(), key.len());
-            if ret < 0 {
-                return None;
+            let mut val_len: u32 = 1024;
+            let mut buffer = vec![0u8; val_len as usize];
+            let ret = host_storage_get(key.as_ptr(), key.len(), buffer.as_mut_ptr(), &mut val_len as *mut u32 as *mut usize);
+            if ret == 0 {
+                return None;  // Not found
             }
-
-            let size = ret as usize;
-            let mut buffer = vec![0u8; size];
-            host_get_result(buffer.as_mut_ptr(), size);
+            if val_len > buffer.len() as u32 {
+                buffer.resize(val_len as usize, 0);
+                host_storage_get(key.as_ptr(), key.len(), buffer.as_mut_ptr(), &mut val_len as *mut u32 as *mut usize);
+            }
+            buffer.truncate(val_len as usize);
             String::from_utf8(buffer).ok()
         }
     }
 
     pub fn set(key: &str, value: &str) -> bool {
         unsafe {
-            let ret = storage_set_v2(
+            let ret = host_storage_set(
                 key.as_ptr(),
                 key.len(),
                 value.as_ptr(),
@@ -82,10 +86,16 @@ mod storage {
 
     pub fn delete(key: &str) -> bool {
         unsafe {
-            let ret = storage_delete_v2(key.as_ptr(), key.len());
+            let ret = host_storage_delete(key.as_ptr(), key.len());
             ret >= 0
         }
     }
+}
+
+fn json_response(status: u16, body: String) -> Response {
+    let mut headers = HashMap::new();
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    Response { status, body, headers }
 }
 
 fn get_next_id() -> String {
@@ -183,17 +193,8 @@ fn handle_request(req: Request) -> Response {
     let method = req.method.as_str();
     let path = req.path.as_str();
 
-    // Parse query parameters
-    let query_params: Vec<(String, String)> = req
-        .query
-        .as_ref()
-        .map(|q| parse_query(q))
-        .unwrap_or_default();
-
-    let id_param = query_params
-        .iter()
-        .find(|(k, _)| k == "id")
-        .map(|(_, v)| v.as_str());
+    // Get id from query parameters
+    let id_param = req.query.get("id").map(|s| s.as_str());
 
     match (method, path) {
         // GET / - List all todos
@@ -201,34 +202,12 @@ fn handle_request(req: Request) -> Response {
         ("GET", "/") => {
             if let Some(id) = id_param {
                 match get_todo(id) {
-                    Some(todo) => {
-                        let body = serde_json::to_string(&todo).unwrap();
-                        Response {
-                            status: 200,
-                            body,
-                            headers: vec![
-                                ("Content-Type".to_string(), "application/json".to_string())
-                            ],
-                        }
-                    }
-                    None => Response {
-                        status: 404,
-                        body: r#"{"error":"Todo not found"}"#.to_string(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
+                    Some(todo) => json_response(200, serde_json::to_string(&todo).unwrap()),
+                    None => json_response(404, r#"{"error":"Todo not found"}"#.to_string()),
                 }
             } else {
                 let todos = list_todos();
-                let body = serde_json::to_string(&todos).unwrap();
-                Response {
-                    status: 200,
-                    body,
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                }
+                json_response(200, serde_json::to_string(&todos).unwrap())
             }
         }
 
@@ -237,31 +216,10 @@ fn handle_request(req: Request) -> Response {
             let body = req.body.unwrap_or_default();
             match serde_json::from_str::<CreateTodo>(&body) {
                 Ok(create_req) => match create_todo(create_req.title) {
-                    Ok(todo) => {
-                        let body = serde_json::to_string(&todo).unwrap();
-                        Response {
-                            status: 201,
-                            body,
-                            headers: vec![
-                                ("Content-Type".to_string(), "application/json".to_string())
-                            ],
-                        }
-                    }
-                    Err(err) => Response {
-                        status: 500,
-                        body: format!(r#"{{"error":"{}"}}"#, err),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    },
+                    Ok(todo) => json_response(201, serde_json::to_string(&todo).unwrap()),
+                    Err(err) => json_response(500, format!(r#"{{"error":"{}"}}"#, err)),
                 },
-                Err(_) => Response {
-                    status: 400,
-                    body: r#"{"error":"Invalid request body"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                },
+                Err(_) => json_response(400, r#"{"error":"Invalid request body"}"#.to_string()),
             }
         }
 
@@ -271,35 +229,14 @@ fn handle_request(req: Request) -> Response {
             match serde_json::from_str::<UpdateTodo>(&body) {
                 Ok(update_req) => {
                     match update_todo(update_req.id, update_req.title, update_req.done) {
-                        Ok(todo) => {
-                            let body = serde_json::to_string(&todo).unwrap();
-                            Response {
-                                status: 200,
-                                body,
-                                headers: vec![
-                                    ("Content-Type".to_string(), "application/json".to_string())
-                                ],
-                            }
-                        }
+                        Ok(todo) => json_response(200, serde_json::to_string(&todo).unwrap()),
                         Err(err) => {
                             let status = if err.contains("not found") { 404 } else { 500 };
-                            Response {
-                                status,
-                                body: format!(r#"{{"error":"{}"}}"#, err),
-                                headers: vec![
-                                    ("Content-Type".to_string(), "application/json".to_string())
-                                ],
-                            }
+                            json_response(status, format!(r#"{{"error":"{}"}}"#, err))
                         }
                     }
                 }
-                Err(_) => Response {
-                    status: 400,
-                    body: r#"{"error":"Invalid request body"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                },
+                Err(_) => json_response(400, r#"{"error":"Invalid request body"}"#.to_string()),
             }
         }
 
@@ -307,40 +244,16 @@ fn handle_request(req: Request) -> Response {
         ("DELETE", "/") => {
             if let Some(id) = id_param {
                 if delete_todo(id) {
-                    Response {
-                        status: 200,
-                        body: r#"{"success":true}"#.to_string(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    }
+                    json_response(200, r#"{"success":true}"#.to_string())
                 } else {
-                    Response {
-                        status: 404,
-                        body: r#"{"error":"Todo not found"}"#.to_string(),
-                        headers: vec![
-                            ("Content-Type".to_string(), "application/json".to_string())
-                        ],
-                    }
+                    json_response(404, r#"{"error":"Todo not found"}"#.to_string())
                 }
             } else {
-                Response {
-                    status: 400,
-                    body: r#"{"error":"Missing id parameter"}"#.to_string(),
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string())
-                    ],
-                }
+                json_response(400, r#"{"error":"Missing id parameter"}"#.to_string())
             }
         }
 
-        _ => Response {
-            status: 404,
-            body: r#"{"error":"Not found"}"#.to_string(),
-            headers: vec![
-                ("Content-Type".to_string(), "application/json".to_string())
-            ],
-        },
+        _ => json_response(404, r#"{"error":"Not found"}"#.to_string()),
     }
 }
 
@@ -353,13 +266,7 @@ fn main() {
     let request: Request = match serde_json::from_str(&input) {
         Ok(req) => req,
         Err(e) => {
-            let error_response = Response {
-                status: 400,
-                body: format!(r#"{{"error":"Invalid request: {}"}}"#, e),
-                headers: vec![
-                    ("Content-Type".to_string(), "application/json".to_string())
-                ],
-            };
+            let error_response = json_response(400, format!(r#"{{"error":"Invalid request: {}"}}"#, e));
             let output = serde_json::to_string(&error_response).unwrap();
             print!("{}", output);
             return;

@@ -204,7 +204,7 @@ impl RequestHandler {
     }
 
     /// Fetch module bytes from cache or network
-    async fn fetch_module(&self, cid: &str) -> Result<Option<Vec<u8>>> {
+    pub async fn fetch_module(&self, cid: &str) -> Result<Option<Vec<u8>>> {
         use crate::wasm::ModuleCid;
 
         let module_cid = ModuleCid::new(cid.to_string());
@@ -397,29 +397,42 @@ impl RequestHandler {
 
         // Check if this is a TAR archive (legacy support)
         if Self::is_tar_archive(bytes) {
-            // Try to serve index.html from the bundle
-            let index_path = if path.is_empty() || path == "/" {
+            // Determine which file to extract from the TAR
+            let file_path = if path.is_empty() || path == "/" {
                 "index.html"
             } else {
-                path
+                path.trim_start_matches('/')
             };
 
-            match Self::extract_from_tar(bytes, index_path).await {
-                Ok(Some(html_data)) => {
+            match Self::extract_from_tar(bytes, file_path).await {
+                Ok(Some(file_data)) => {
+                    // Determine content type based on file extension
+                    let content_type = crate::bundle::AppBundle::content_type_for_path(file_path);
+                    
                     info!(
-                        "Serving frontend: {} ({} bytes)",
-                        index_path,
-                        html_data.len()
+                        "Serving file from TAR: {} ({} bytes, {})",
+                        file_path,
+                        file_data.len(),
+                        content_type
                     );
-                    self.build_html_response(html_data)
+                    
+                    // Use the proper asset response builder for all file types
+                    self.build_asset_response(file_path, &file_data, content_type)
                 }
                 Ok(None) => {
-                    // index.html not found in bundle, return app listing
-                    self.serve_app_listing(bytes).await
+                    // File not found in TAR archive
+                    error!("File '{}' not found in TAR archive", file_path);
+                    self.error_response(
+                        StatusCode::NOT_FOUND,
+                        &format!("Asset '{}' not found in TAR archive", file_path),
+                    )
                 }
                 Err(e) => {
-                    error!("Failed to extract HTML from bundle: {}", e);
-                    self.serve_app_listing(bytes).await
+                    error!("Failed to extract file from TAR: {}", e);
+                    self.error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to extract file from TAR archive",
+                    )
                 }
             }
         } else {
