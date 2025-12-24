@@ -9,7 +9,7 @@
 
 mod host;
 pub mod loader; // Make loader public for content module
-mod runtime;
+pub mod runtime; // Make runtime public for benchmarks
 mod sandbox;
 
 pub use host::HostFunctions;

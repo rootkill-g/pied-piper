@@ -50,5 +50,18 @@ wasmtime-wasi = { version = "39.0.1", features = ["p1", "p2"] }
 zstd = "0.13"
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 rand = "0.9.2"
 tempfile = "3.23.0"
+
+[[bench]]
+name = "crypto_bench"
+harness = false
+
+[[bench]]
+name = "package_bench"
+harness = false
+
+[[bench]]
+name = "wasm_bench"
+harness = false
