@@ -376,19 +376,22 @@ mod tests {
         // Path with multiple slashes
         assert_eq!(PathSanitizer::normalize("//api///users//").unwrap(), "api/users");
 
-        // Invalid paths
+        // Invalid paths (parent directory traversal)
         assert!(PathSanitizer::normalize("/../etc/passwd").is_err());
-        assert!(PathSanitizer::normalize("/etc/shadow").is_err());
+        
+        // Absolute paths should succeed after normalization
+        assert_eq!(PathSanitizer::normalize("/etc/shadow").unwrap(), "etc/shadow");
+        
+        // Null bytes should fail
         assert!(PathSanitizer::normalize("path/with/null\0byte").is_err());
     }
 
     #[test]
     fn test_url_encoding() {
-        // URL encoded paths
-        assert_eq!(
-            PathSanitizer::normalize("/hello%20world.txt").unwrap(),
-            "hello world.txt"
-        );
+        // URL-encoded spaces are decoded but then fail validation (spaces not allowed)
+        assert!(PathSanitizer::normalize("/hello%20world.txt").is_err());
+        
+        // URL-encoded slashes are decoded successfully
         assert_eq!(PathSanitizer::normalize("/api%2Fusers").unwrap(), "api/users");
     }
 

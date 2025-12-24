@@ -703,4 +703,116 @@ storage:
         assert!(toml_str.contains("[gateway]"));
         assert!(toml_str.contains("tcp_port"));
     }
+    
+    #[test]
+    fn test_bootstrap_peers_parsing() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let yaml_content = r#"
+network:
+  tcp_port: 4001
+  bootstrap_peers:
+    - "/ip4/127.0.0.1/tcp/4000"
+    - "/ip4/192.168.1.1/tcp/4000"
+"#;
+        fs::write(&config_path, yaml_content).unwrap();
+
+        let config = PiedPiperConfig::load(Some(&config_path)).unwrap();
+        assert_eq!(config.network.bootstrap_peers.len(), 2);
+        assert_eq!(config.network.bootstrap_peers[0], "/ip4/127.0.0.1/tcp/4000");
+    }
+    
+    #[test]
+    fn test_mdns_configuration() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let yaml_content = r#"
+network:
+  tcp_port: 4001
+  enable_mdns: false
+"#;
+        fs::write(&config_path, yaml_content).unwrap();
+
+        let config = PiedPiperConfig::load(Some(&config_path)).unwrap();
+        assert!(!config.network.enable_mdns);
+    }
+    
+    #[test]
+    fn test_network_configuration() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let yaml_content = r#"
+network:
+  tcp_port: 4001
+  quic_port: 4002
+  max_connections: 500
+"#;
+        fs::write(&config_path, yaml_content).unwrap();
+
+        let config = PiedPiperConfig::load(Some(&config_path)).unwrap();
+        assert_eq!(config.network.tcp_port, 4001);
+        assert_eq!(config.network.quic_port, 4002);
+        assert_eq!(config.network.max_connections, 500);
+    }
+    
+    #[test]
+    fn test_invalid_yaml_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let yaml_content = "invalid: yaml: content: {";
+        fs::write(&config_path, yaml_content).unwrap();
+
+        let result = PiedPiperConfig::load(Some(&config_path));
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_missing_config_file_uses_default() {
+        let result = PiedPiperConfig::load(Some(&PathBuf::from("/nonexistent/config.yaml")));
+        // Should return default config when file doesn't exist
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_log_level_validation() {
+        let mut config = PiedPiperConfig::default();
+        
+        config.logging.level = "trace".to_string();
+        assert!(config.validate().is_ok());
+        
+        config.logging.level = "debug".to_string();
+        assert!(config.validate().is_ok());
+        
+        config.logging.level = "info".to_string();
+        assert!(config.validate().is_ok());
+        
+        config.logging.level = "warn".to_string();
+        assert!(config.validate().is_ok());
+        
+        config.logging.level = "error".to_string();
+        assert!(config.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_connection_limits() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let yaml_content = r#"
+network:
+  tcp_port: 4001
+  max_connections: 500
+  idle_timeout_secs: 120
+"#;
+        fs::write(&config_path, yaml_content).unwrap();
+
+        let config = PiedPiperConfig::load(Some(&config_path)).unwrap();
+        assert_eq!(config.network.max_connections, 500);
+        assert_eq!(config.network.idle_timeout_secs, 120);
+    }
 }
+

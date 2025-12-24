@@ -150,6 +150,28 @@ mod tests {
     }
     
     #[test]
+    fn test_encryption_empty_data() {
+        let key = generate_key();
+        let plaintext = b"";
+        
+        let ciphertext = encrypt(plaintext, &key).unwrap();
+        let decrypted = decrypt(&ciphertext, &key).unwrap();
+        
+        assert_eq!(plaintext, &decrypted[..]);
+    }
+    
+    #[test]
+    fn test_encryption_large_data() {
+        let key = generate_key();
+        let plaintext = vec![0u8; 1_000_000]; // 1MB
+        
+        let ciphertext = encrypt(&plaintext, &key).unwrap();
+        let decrypted = decrypt(&ciphertext, &key).unwrap();
+        
+        assert_eq!(plaintext, decrypted);
+    }
+    
+    #[test]
     fn test_wrong_key_fails() {
         let key1 = generate_key();
         let key2 = generate_key();
@@ -158,6 +180,35 @@ mod tests {
         let ciphertext = encrypt(plaintext, &key1).unwrap();
         let result = decrypt(&ciphertext, &key2);
         
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_corrupted_ciphertext_fails() {
+        let key = generate_key();
+        let plaintext = b"test data";
+        
+        let mut ciphertext = encrypt(plaintext, &key).unwrap();
+        
+        // Corrupt the ciphertext
+        if let Some(byte) = ciphertext.get_mut(20) {
+            *byte ^= 0xFF;
+        }
+        
+        let result = decrypt(&ciphertext, &key);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_truncated_ciphertext_fails() {
+        let key = generate_key();
+        let plaintext = b"test data";
+        
+        let ciphertext = encrypt(plaintext, &key).unwrap();
+        
+        // Truncate ciphertext
+        let truncated = &ciphertext[..10];
+        let result = decrypt(truncated, &key);
         assert!(result.is_err());
     }
     
@@ -179,6 +230,28 @@ mod tests {
     }
     
     #[test]
+    fn test_network_key_consistency() {
+        let key1 = get_network_key();
+        let key2 = get_network_key();
+        
+        assert_eq!(key1, key2);
+    }
+    
+    #[test]
+    fn test_network_key_length() {
+        let key = get_network_key();
+        assert_eq!(key.len(), KEY_SIZE);
+    }
+    
+    #[test]
+    fn test_network_key_different_from_peer_keys() {
+        let network_key = get_network_key();
+        let peer_key = derive_key_from_peer_id("12D3KooWTest");
+        
+        assert_ne!(network_key, peer_key);
+    }
+    
+    #[test]
     fn test_hash_verification() {
         let data = b"test data";
         let hash = hash_sha256(data);
@@ -188,4 +261,37 @@ mod tests {
         let wrong_data = b"wrong data";
         assert!(!verify_hash(wrong_data, &hash));
     }
+    
+    #[test]
+    fn test_hash_deterministic() {
+        let data = b"test data";
+        let hash1 = hash_sha256(data);
+        let hash2 = hash_sha256(data);
+        
+        assert_eq!(hash1, hash2);
+    }
+    
+    #[test]
+    fn test_hash_different_for_different_data() {
+        let hash1 = hash_sha256(b"data1");
+        let hash2 = hash_sha256(b"data2");
+        
+        assert_ne!(hash1, hash2);
+    }
+    
+    #[test]
+    fn test_generate_key_randomness() {
+        let key1 = generate_key();
+        let key2 = generate_key();
+        
+        // Keys should be different (random)
+        assert_ne!(key1, key2);
+    }
+    
+    #[test]
+    fn test_generate_key_length() {
+        let key = generate_key();
+        assert_eq!(key.len(), KEY_SIZE);
+    }
 }
+

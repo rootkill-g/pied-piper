@@ -179,6 +179,7 @@ impl PiperNetPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::crypto::generate_key;
     
     #[test]
     fn test_package_roundtrip() {
@@ -204,11 +205,205 @@ mod tests {
         
         let package = PiperNetPackage::new(manifest, module, assets, HashMap::new());
         
-        let key = b"test_encryption_key_32_bytes!!";
+        let key = b"test_encryption_key_32_bytes!32!";  // Exactly 32 bytes
+        assert_eq!(key.len(), 32, "Test key must be 32 bytes");
         let bytes = package.to_bytes(key).unwrap();
         
         let decoded = PiperNetPackage::from_bytes(&bytes, key).unwrap();
         
         assert_eq!(package.manifest.metadata.name, decoded.manifest.metadata.name);
     }
+    
+    #[test]
+    fn test_package_magic_bytes() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "module.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let module = vec![0x00, 0x61, 0x73, 0x6d]; // WASM magic bytes
+        let package = PiperNetPackage::new(manifest, module, HashMap::new(), HashMap::new());
+        
+        let key = generate_key();
+        let bytes = package.to_bytes(&key).unwrap();
+        
+        // Check magic bytes
+        assert_eq!(&bytes[0..4], b"PN\x01\x00");
+    }
+    
+    #[test]
+    fn test_package_with_assets() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "frontend-app".to_string(),
+                version: "2.0.0".to_string(),
+                description: Some("Frontend app".to_string()),
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Frontend,
+            entrypoint: "app.wasm".to_string(),
+            assets: vec!["index.html".to_string(), "style.css".to_string()],
+            dependencies: HashMap::new(),
+        };
+        
+        let module = b"wasm module content".to_vec();
+        let mut assets = HashMap::new();
+        assets.insert("index.html".to_string(), b"<!DOCTYPE html>".to_vec());
+        assets.insert("style.css".to_string(), b"body { margin: 0; }".to_vec());
+        
+        let package = PiperNetPackage::new(manifest, module, assets, HashMap::new());
+        
+        let key = generate_key();
+        let bytes = package.to_bytes(&key).unwrap();
+        let decoded = PiperNetPackage::from_bytes(&bytes, &key).unwrap();
+        
+        assert_eq!(decoded.assets.len(), 2);
+        assert!(decoded.assets.contains_key("index.html"));
+        assert!(decoded.assets.contains_key("style.css"));
+    }
+    
+    #[test]
+    fn test_package_get_module() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "module.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let module_content = b"original wasm module content";
+        let package = PiperNetPackage::new(manifest, module_content.to_vec(), HashMap::new(), HashMap::new());
+        
+        let key = generate_key();
+        let bytes = package.to_bytes(&key).unwrap();
+        let decoded = PiperNetPackage::from_bytes(&bytes, &key).unwrap();
+        
+        // Module is already decrypted in the package structure after from_bytes
+        assert_eq!(decoded.module, module_content);
+    }
+    
+    #[test]
+    fn test_package_wrong_key_fails() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "module.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let module = vec![0u8; 100];
+        let package = PiperNetPackage::new(manifest, module, HashMap::new(), HashMap::new());
+        
+        let key1 = generate_key();
+        let key2 = generate_key();
+        
+        let bytes = package.to_bytes(&key1).unwrap();
+        let result = PiperNetPackage::from_bytes(&bytes, &key2);
+        
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_package_corrupted_data_fails() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "module.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let module = vec![0u8; 100];
+        let package = PiperNetPackage::new(manifest, module, HashMap::new(), HashMap::new());
+        
+        let key = generate_key();
+        let mut bytes = package.to_bytes(&key).unwrap();
+        
+        // Corrupt some bytes in the middle
+        if bytes.len() > 50 {
+            bytes[50] ^= 0xFF;
+            bytes[51] ^= 0xFF;
+        }
+        
+        let result = PiperNetPackage::from_bytes(&bytes, &key);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_package_invalid_magic_bytes() {
+        let key = generate_key();
+        let invalid_data = b"XXXX some data";
+        
+        let result = PiperNetPackage::from_bytes(invalid_data, &key);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_package_empty_module() {
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "empty-test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "module.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let module = Vec::new();
+        let package = PiperNetPackage::new(manifest, module, HashMap::new(), HashMap::new());
+        
+        let key = generate_key();
+        let bytes = package.to_bytes(&key).unwrap();
+        let decoded = PiperNetPackage::from_bytes(&bytes, &key).unwrap();
+        
+        assert_eq!(decoded.module.len(), 0);
+    }
 }
+

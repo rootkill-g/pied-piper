@@ -152,4 +152,101 @@ mod tests {
         assert_eq!(manifest.metadata.version, "1.0.0");
         assert_eq!(manifest.package_type, PackageType::Backend);
     }
+    
+    #[test]
+    fn test_minimal_manifest() {
+        let manifest = PackageManifest::minimal(
+            "my-app".to_string(),
+            "0.1.0".to_string(),
+            "app.wasm".to_string(),
+        );
+        
+        assert_eq!(manifest.metadata.name, "my-app");
+        assert_eq!(manifest.metadata.version, "0.1.0");
+        assert_eq!(manifest.entrypoint, "app.wasm");
+        assert!(manifest.metadata.description.is_none());
+        assert!(manifest.metadata.author.is_none());
+    }
+    
+    #[test]
+    fn test_manifest_with_dependencies() {
+        let mut manifest = PackageManifest::minimal(
+            "app".to_string(),
+            "1.0.0".to_string(),
+            "app.wasm".to_string(),
+        );
+        
+        manifest.dependencies.insert("lib1".to_string(), "1.0.0".to_string());
+        manifest.dependencies.insert("lib2".to_string(), "2.0.0".to_string());
+        
+        let toml = manifest.to_toml().unwrap();
+        let decoded = PackageManifest::from_toml(&toml).unwrap();
+        
+        assert_eq!(decoded.dependencies.len(), 2);
+        assert_eq!(decoded.dependencies.get("lib1"), Some(&"1.0.0".to_string()));
+        assert_eq!(decoded.dependencies.get("lib2"), Some(&"2.0.0".to_string()));
+    }
+    
+    #[test]
+    fn test_backend_package_type() {
+        let manifest = PackageManifest::example();
+        let decoded = PackageManifest::from_toml(&manifest).unwrap();
+        
+        assert_eq!(decoded.package_type, PackageType::Backend);
+        assert_eq!(decoded.entrypoint, "target/wasm32-wasip1/release/hello-api.wasm");
+    }
+    
+    #[test]
+    fn test_manifest_serialization_with_all_fields() {
+        let mut manifest = PackageManifest::minimal(
+            "full-app".to_string(),
+            "2.0.0".to_string(),
+            "main.wasm".to_string(),
+        );
+        
+        manifest.metadata.description = Some("A full-featured app".to_string());
+        manifest.metadata.author = Some("Test Author".to_string());
+        manifest.metadata.license = Some("MIT".to_string());
+        manifest.metadata.repository = Some("https://github.com/test/app".to_string());
+        
+        let toml = manifest.to_toml().unwrap();
+        let decoded = PackageManifest::from_toml(&toml).unwrap();
+        
+        assert_eq!(decoded.metadata.description, Some("A full-featured app".to_string()));
+        assert_eq!(decoded.metadata.author, Some("Test Author".to_string()));
+        assert_eq!(decoded.metadata.license, Some("MIT".to_string()));
+        assert_eq!(decoded.metadata.repository, Some("https://github.com/test/app".to_string()));
+    }
+    
+    #[test]
+    fn test_invalid_toml_fails() {
+        let invalid_toml = "invalid toml content { }";
+        let result = PackageManifest::from_toml(invalid_toml);
+        
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_missing_required_fields_fails() {
+        let incomplete_toml = r#"
+[metadata]
+name = "incomplete"
+# missing version and other required fields
+"#;
+        
+        let result = PackageManifest::from_toml(incomplete_toml);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_version_format() {
+        let manifest = PackageManifest::minimal(
+            "app".to_string(),
+            "1.2.3".to_string(),
+            "app.wasm".to_string(),
+        );
+        
+        assert_eq!(manifest.metadata.version, "1.2.3");
+    }
 }
+

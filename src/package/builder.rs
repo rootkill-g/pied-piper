@@ -186,6 +186,8 @@ pub async fn build_package(
 mod tests {
     use super::*;
     use super::super::manifest::{PackageMetadata, PackageType};
+    use tempfile::TempDir;
+    use std::fs;
     
     #[tokio::test]
     async fn test_builder_creation() {
@@ -208,4 +210,160 @@ mod tests {
         let builder = PackageBuilder::new(manifest, PathBuf::from("/tmp"));
         assert_eq!(builder.manifest.metadata.name, "test");
     }
+    
+    #[tokio::test]
+    async fn test_builder_with_module() {
+        let temp_dir = TempDir::new().unwrap();
+        let module_path = temp_dir.path().join("test.wasm");
+        // Write proper WASM magic bytes
+        fs::write(&module_path, b"\0asm\x01\x00\x00\x00").unwrap();
+        
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "test.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let mut builder = PackageBuilder::new(manifest, temp_dir.path().to_path_buf());
+        let result = builder.load_module().await;
+        assert!(result.is_ok(), "Failed to load module: {:?}", result.err());
+    }
+    
+    #[tokio::test]
+    async fn test_builder_add_asset() {
+        let temp_dir = TempDir::new().unwrap();
+        let asset_path = temp_dir.path().join("index.html");
+        fs::write(&asset_path, b"<html></html>").unwrap();
+        
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Frontend,
+            entrypoint: "app.wasm".to_string(),
+            assets: vec!["index.html".to_string()],
+            dependencies: HashMap::new(),
+        };
+        
+        let mut builder = PackageBuilder::new(manifest, temp_dir.path().to_path_buf());
+        let result = builder.load_assets().await;
+        assert!(result.is_ok());
+        assert!(builder.asset_files.contains_key("index.html"));
+    }
+    
+    #[tokio::test]
+    async fn test_builder_build_package() {
+        let temp_dir = TempDir::new().unwrap();
+        let module_path = temp_dir.path().join("test.wasm");
+        fs::write(&module_path, vec![0x00, 0x61, 0x73, 0x6d]).unwrap();
+        
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "test.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let mut builder = PackageBuilder::new(manifest, temp_dir.path().to_path_buf());
+        builder.load_module().await.unwrap();
+        
+        let key = crate::package::crypto::generate_key();
+        let package = builder.build(&key);
+        assert!(package.is_ok());
+        
+        let pkg = package.unwrap();
+        assert_eq!(pkg.manifest.metadata.name, "test");
+        assert!(!pkg.module.is_empty());
+    }
+    
+    #[tokio::test]
+    async fn test_builder_missing_module_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Backend,
+            entrypoint: "nonexistent.wasm".to_string(),
+            assets: vec![],
+            dependencies: HashMap::new(),
+        };
+        
+        let builder = PackageBuilder::new(manifest, temp_dir.path().to_path_buf());
+        let key = crate::package::crypto::generate_key();
+        let result = builder.build(&key);
+        
+        assert!(result.is_err());
+    }
+    
+    #[tokio::test]
+    async fn test_builder_multiple_assets() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        let html_path = temp_dir.path().join("index.html");
+        let css_path = temp_dir.path().join("style.css");
+        let js_path = temp_dir.path().join("app.js");
+        
+        fs::write(&html_path, b"<html></html>").unwrap();
+        fs::write(&css_path, b"body {}").unwrap();
+        fs::write(&js_path, b"console.log()").unwrap();
+        
+        let manifest = PackageManifest {
+            metadata: PackageMetadata {
+                name: "frontend".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                author: None,
+                license: None,
+                homepage: None,
+                repository: None,
+            },
+            package_type: PackageType::Frontend,
+            entrypoint: "app.wasm".to_string(),
+            assets: vec![
+                "index.html".to_string(),
+                "style.css".to_string(),
+                "app.js".to_string(),
+            ],
+            dependencies: HashMap::new(),
+        };
+        
+        let mut builder = PackageBuilder::new(manifest, temp_dir.path().to_path_buf());
+        builder.load_assets().await.unwrap();
+        
+        assert_eq!(builder.asset_files.len(), 3);
+    }
 }
+
